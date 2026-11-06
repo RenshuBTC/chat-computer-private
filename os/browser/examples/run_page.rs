@@ -53,7 +53,7 @@ fn run() {
                 continue;
             }
             match a.as_str() {
-                "--ms" | "--why" | "--eval" | "--before" | "--window" => skip = 1,
+                "--ms" | "--why" | "--eval" | "--before" | "--window" | "--scroll" => skip = 1,
                 "--ppm" => skip = 2,
                 "--html" | "--items" | "--boxes" => {}
                 _ => out.push(a),
@@ -200,8 +200,13 @@ fn run() {
         let mut pixels = vec![0u32; w * h];
         let mut surface = Surface { pixels: &mut pixels, width: w, height: h, clip: (0, 0, w as i32, h as i32) };
         let mut painter = Painter::new();
+        // (--scroll Y: the window scrolled Y CSS pixels down.)
+        let scroll: f32 = flag("--scroll").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        if scroll > 0.0 {
+            page.scrolled_by_user(scroll);
+        }
         let laid = page.laid().expect("laid out");
-        painter.draw(&ty, laid, 0, 0, 0.0, &mut surface, &page.shown(&pictures), true);
+        painter.draw(&ty, laid, 0, 0, scroll, &mut surface, &page.shown(&pictures), true);
         let mut f = std::fs::File::create(out).expect("the picture's file");
         write!(f, "P6\n{w} {h}\n255\n").ok();
         let mut bytes = Vec::with_capacity(w * h * 3);

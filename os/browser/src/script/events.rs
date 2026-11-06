@@ -729,10 +729,13 @@ pub fn dispatch(vm: &mut Vm, target: &Value, e: Gc) -> bool {
         Value::Str(s) => s.to_rust(),
         _ => String::new(),
     };
-    // Handlers in attributes (onclick="...") made into functions as their events come.
+    // Handlers in attributes (onclick="...") made into functions as their events come; the body's onload and the
+    // like are the window's.
     for p in &path {
         if let Some(n) = node_of(vm, p) {
             attribute_handler(vm, n, &ty);
+        } else if matches!(p, Value::Obj(w) if *w == host_ref(vm).window) {
+            window_attribute_handler(vm, &ty);
         }
     }
     let bubbles = f & BUBBLES != 0;
@@ -930,6 +933,45 @@ pub fn attribute_handler(vm: &mut Vm, n: NodeId, ty: &str) {
     if let Value::Obj(t) = w {
         set_handler(vm, t, ty, f);
     }
+}
+
+/// The window's events whose handlers the body's attributes give (onload="..." on <body> or <frameset>).
+const WINDOW_EVENTS: [&str; 14] = ["load", "unload", "beforeunload", "hashchange", "popstate", "message", "online", "offline", "pagehide", "pageshow", "resize", "storage", "error", "focus"];
+
+/// The body's on<event> attribute for one of the window's events made into the window's handler, as HTML has it.
+fn window_attribute_handler(vm: &mut Vm, ty: &str) {
+    if !WINDOW_EVENTS.contains(&ty) {
+        return;
+    }
+    let attr = format!("on{ty}");
+    let code = {
+        let d = &host_ref(vm).doc;
+        let body = d.find("body").or_else(|| d.find("frameset"));
+        match body.and_then(|b| d.element(b)).and_then(|e| e.attr(&attr)) {
+            Some(c) => String::from(c),
+            None => return,
+        }
+    };
+    let key = (usize::MAX, 0x1000_0000 + fnv(&attr) % 0x0fff_ffff);
+    if let Some(&made) = host_ref(vm).cache.get(&key) {
+        let same = matches!(slot(vm, &Value::Obj(made), host_ref(vm).syms.data), Value::Str(ref s) if s.to_rust() == code);
+        if same {
+            return;
+        }
+    }
+    let src = format!("(function(event){{with(document){{return (function(){{{code}\n}}).call(this);}}}})");
+    let f = match vm.indirect_eval(&src) {
+        Ok(f) => f,
+        Err(e) => {
+            super::report(vm, &e, "an event handler attribute");
+            return;
+        }
+    };
+    let Value::Obj(fg) = f else { return };
+    set_slot(vm, fg, host_ref(vm).syms.data, js(&code));
+    host(vm).cache.insert(key, fg);
+    let w = host_ref(vm).window;
+    set_handler(vm, w, ty, f);
 }
 
 pub fn fnv(s: &str) -> u32 {

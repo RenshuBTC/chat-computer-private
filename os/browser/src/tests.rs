@@ -847,13 +847,28 @@ fn a_box_shadow_is_drawn_under_its_box() {
          box-shadow:0 4px 32px 2px rgba(0, 0, 0, 0.1), 0 1px 2px blue'></div></body>",
     );
     let l = laid(&mut p);
-    let shadow = l.items.iter().position(|i| matches!(i.paint, Paint::Shadow { .. })).expect("a shadow");
+    let shadows: Vec<usize> = l.items.iter().enumerate().filter(|(_, i)| matches!(i.paint, Paint::Shadow { .. })).map(|(k, _)| k).collect();
     let background = l.items.iter().position(|i| matches!(i.paint, Paint::Rect { color: RED, .. })).expect("the background");
-    assert!(shadow < background, "the shadow first, the box over it");
-    let Paint::Shadow { x, y, w, h, radius, dx, dy, blur, spread, color } = l.items[shadow].paint else { unreachable!() };
+    assert_eq!(shadows.len(), 2, "both shadows");
+    assert!(shadows.iter().all(|&k| k < background), "the shadows first, the box over them");
+    // (The first listed is drawn last: on top.)
+    let Paint::Shadow { x, y, w, h, radius, dx, dy, blur, spread, color, inset } = l.items[shadows[1]].paint else { unreachable!() };
     assert_eq!((x, y, w, h, radius), (20.0, 20.0, 100.0, 50.0, [12.0; 4]));
-    assert_eq!((dx, dy, blur, spread), (0.0, 4.0, 32.0, 2.0));
+    assert_eq!((dx, dy, blur, spread, inset), (0.0, 4.0, 32.0, 2.0, false));
     assert_eq!(color >> 24, 26, "its colour's alpha, 0.1");
+    let Paint::Shadow { blur, color, .. } = l.items[shadows[0]].paint else { unreachable!() };
+    assert_eq!((blur, color), (2.0, BLUE));
+}
+
+#[test]
+fn an_inset_shadow_is_drawn_inside_over_the_background() {
+    let mut p = page("<body style='margin:0'><div style='width:100px;height:40px;background:red;border:2px solid;box-shadow:inset 0 -2px 0 blue'></div></body>");
+    let l = laid(&mut p);
+    let background = l.items.iter().position(|i| matches!(i.paint, Paint::Rect { color: RED, .. })).expect("the background");
+    let inset = l.items.iter().position(|i| matches!(i.paint, Paint::Shadow { inset: true, .. })).expect("the inset shadow");
+    assert!(background < inset);
+    let Paint::Shadow { x, y, w, h, dy, .. } = l.items[inset].paint else { unreachable!() };
+    assert_eq!((x, y, w, h, dy), (2.0, 2.0, 100.0, 40.0, -2.0), "within the padding box");
 }
 
 #[test]
@@ -1027,21 +1042,21 @@ fn font_face_rules_are_read_from_a_sheets_text() {
 fn a_font_is_chosen_by_family_style_and_nearest_weight() {
     use crate::style::{WebFont, pick_font};
     let face = |w: (u16, u16), italic: bool, ranges: Vec<(u32, u32)>| WebFont {
-        face: crate::css::FontFace { family: String::from("f"), sources: Vec::new(), weight: w, italic, ranges },
+        face: crate::css::FontFace { family: String::from("f"), sources: Vec::new(), weight: w, italic, ranges, stretch: (100, 100) },
         loaded: None,
     };
     let fonts = [face((300, 300), false, vec![]), face((700, 700), false, vec![]), face((400, 400), true, vec![]), face((400, 400), false, vec![(0x400, 0x4FF)]), face((400, 400), false, vec![(0, 0xFF)])];
     let names = [String::from("other"), String::from("f")];
     // (400: the Latin one of the two for it; 500: up to 500, else lighter; 600: heavier; italic: the italic one.)
-    assert_eq!(pick_font(&fonts, &names, 400, false), Some((4, false, false)));
-    assert_eq!(pick_font(&fonts, &names, 500, false).map(|p| p.0), Some(4));
-    assert_eq!(pick_font(&fonts, &names, 600, false), Some((1, false, false)));
-    assert_eq!(pick_font(&fonts, &names, 200, false).map(|p| p.0), Some(0));
-    assert_eq!(pick_font(&fonts, &names, 400, true), Some((2, false, false)));
+    assert_eq!(pick_font(&fonts, &names, 400, false, 100), Some((4, false, false)));
+    assert_eq!(pick_font(&fonts, &names, 500, false, 100).map(|p| p.0), Some(4));
+    assert_eq!(pick_font(&fonts, &names, 600, false, 100), Some((1, false, false)));
+    assert_eq!(pick_font(&fonts, &names, 200, false, 100).map(|p| p.0), Some(0));
+    assert_eq!(pick_font(&fonts, &names, 400, true, 100), Some((2, false, false)));
     // (Bold from a face that isn't: made up. Italic with none in the family: leaned.)
     let regular = [face((400, 400), false, vec![])];
-    assert_eq!(pick_font(&regular, &names, 700, true), Some((0, true, true)));
-    assert_eq!(pick_font(&regular, &[String::from("other")], 400, false), None);
+    assert_eq!(pick_font(&regular, &names, 700, true, 100), Some((0, true, true)));
+    assert_eq!(pick_font(&regular, &[String::from("other")], 400, false, 100), None);
 }
 
 #[test]
@@ -1094,4 +1109,178 @@ fn an_element_with_an_id_is_a_global_and_custom_properties_are_worked_out() {
     );
     p.run(0.0);
     assert_eq!(p.take_console(), [r#"["object", "MAIN", "object", "function", true, "undefined", 1]"#, r#"["[10px]", "[10px 10px]", "[]"]"#]);
+}
+
+/// A page laid out `w` × `h` and drawn (its pictures all 2 × 2: red, green; blue, white), its pixels (0xRRGGBB).
+fn drawn(p: &mut Page, w: usize, h: usize) -> Vec<u32> {
+    struct Checker;
+    impl crate::paint::Shown for Checker {
+        fn picture(&self, _n: usize) -> Option<(&[u8], u32, u32)> {
+            Some((&[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255], 2, 2))
+        }
+    }
+    let ty = Type::builtin();
+    // (Laid out, what that asks for come, and laid out again: a background's pictures are asked for by its style.)
+    for _ in 0..2 {
+        while let Some((i, _, _, _)) = p.next_wanted() {
+            p.picture_came(i, 2, 2);
+        }
+        p.lay_out(&ty, w as f32, h as f32, 1.0);
+    }
+    let laid = p.laid().expect("laid out");
+    let mut px = vec![0u32; w * h];
+    let mut surface = crate::paint::Surface { pixels: &mut px, width: w, height: h, clip: (0, 0, w as i32, h as i32) };
+    crate::paint::Painter::new().draw(&ty, laid, 0, 0, 0.0, &mut surface, &Checker, true);
+    px
+}
+
+#[test]
+fn a_background_picture_is_placed_and_repeated_as_its_properties_say() {
+    // A 2 × 2 picture made 10 × 10, from the box's centre, along the x axis only.
+    let mut p = page("<body style='margin:0'><div style='width:60px;height:30px;background:url(c.png) repeat-x center / 10px 10px'></div></body>");
+    let px = drawn(&mut p, 60, 30);
+    let at = |x: usize, y: usize| px[y * 60 + x];
+    // (Centred: a tile's top left at (25, 10); its top left red, top right green, smoothly between them.)
+    assert_eq!(at(26, 11), 0xFF0000);
+    assert_eq!(at(34, 11), 0x00FF00);
+    assert_eq!(at(36, 11), 0xFF0000, "repeated across");
+    assert_eq!(at(4, 11), 0x00FF00, "and to the left, from where the tiles fall");
+    assert_eq!(at(26, 2), 0xFFFFFF, "not down");
+}
+
+#[test]
+fn gradients_go_as_css_says() {
+    let mut p = page("<body style='margin:0'><div style='width:100px;height:20px;background:linear-gradient(to right, black, white)'></div>\
+                      <div style='width:40px;height:40px;background:radial-gradient(circle closest-side, red, red 50%, blue 50%)'></div>\
+                      <div style='width:40px;height:40px;background:conic-gradient(red 25%, blue 25%)'></div></body>");
+    let px = drawn(&mut p, 100, 100);
+    let at = |x: usize, y: usize| px[y * 100 + x];
+    assert!(at(2, 10) & 0xFF < 0x10 && at(97, 10) & 0xFF > 0xF0, "black to white");
+    assert_eq!(at(20, 40), 0xFF0000, "the radial one's middle");
+    assert_eq!(at(20, 22), 0x0000FF, "past half its radius");
+    assert_eq!(at(30, 66), 0xFF0000, "the conic one: its first quarter round from the top");
+    assert_eq!(at(10, 90), 0x0000FF, "and on round");
+}
+
+#[test]
+fn a_transform_turns_what_is_drawn() {
+    // A 40 × 10 bar turned a quarter about its middle: 10 wide and 40 tall.
+    let mut p = page("<body style='margin:0'><div style='margin:30px 0 0 10px;width:40px;height:10px;background:#00f;transform:rotate(90deg)'></div></body>");
+    let px = drawn(&mut p, 80, 80);
+    let at = |x: usize, y: usize| px[y * 80 + x];
+    assert_eq!(at(30, 20), 0x0000FF, "above where it was");
+    assert_eq!(at(30, 50), 0x0000FF, "and below");
+    assert_eq!(at(12, 35), 0xFFFFFF, "its ends are gone from where they were");
+}
+
+#[test]
+fn opacity_makes_a_group_see_through_as_one() {
+    // Two overlapping boxes in a half see-through one: where they overlap, the top one's colour at half, not both.
+    let mut p = page("<body style='margin:0'><div style='opacity:.5'><div style='height:20px;background:#f00'></div>\
+                      <div style='height:20px;margin-top:-10px;background:#00f'></div></div></body>");
+    let px = drawn(&mut p, 20, 40);
+    let c = px[15 * 20 + 5];
+    let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+    assert!((0x78..=0x88).contains(&r) && (0x78..=0x88).contains(&g) && b > 0xF0, "white with blue over it at half (no red under it): {c:06x}");
+}
+
+#[test]
+fn rounded_clipping_cuts_what_is_inside_to_the_corners() {
+    let mut p = page("<body style='margin:0'><div style='width:40px;height:40px;border-radius:20px;overflow:hidden'>\
+                      <div style='height:40px;background:#f00'></div></div></body>");
+    let px = drawn(&mut p, 40, 40);
+    assert_eq!(px[0], 0xFFFFFF, "the corner is left out");
+    assert_eq!(px[20 * 40 + 20], 0xFF0000);
+}
+
+#[test]
+fn positioned_boxes_go_in_their_stacking_context_by_z_index() {
+    // The second box's z-index puts it under the first, inside its context; the context's sibling after it covers it.
+    let mut p = page("<body style='margin:0'><div style='position:relative;z-index:1'>\
+                      <div style='position:absolute;width:20px;height:20px;background:#f00;z-index:2'></div>\
+                      <div style='position:absolute;width:20px;height:20px;background:#0f0;z-index:1'></div></div>\
+                      <div style='position:relative;z-index:0;width:10px;height:10px;background:#00f'></div></body>");
+    let px = drawn(&mut p, 20, 20);
+    assert_eq!(px[15 * 20 + 15], 0xFF0000, "the higher z-index on top, in its context");
+    assert_eq!(px[5 * 20 + 5], 0xFF0000, "the context (z-index 1) over its sibling (0)");
+}
+
+#[test]
+fn a_mask_and_a_clip_path_show_only_their_shapes() {
+    let mut p = page("<body style='margin:0'><div style='width:40px;height:20px;background:#f00;mask-image:linear-gradient(to right, black 50%, transparent 50%)'></div>\
+                      <div style='width:40px;height:40px;background:#00f;clip-path:circle(10px)'></div></body>");
+    let px = drawn(&mut p, 40, 60);
+    assert_eq!(px[10 * 40 + 10], 0xFF0000);
+    assert_eq!(px[10 * 40 + 30], 0xFFFFFF, "masked away");
+    assert_eq!(px[40 * 40 + 20], 0x0000FF, "the circle's middle");
+    assert_eq!(px[22 * 40 + 2], 0xFFFFFF, "outside it");
+}
+
+#[test]
+fn borders_of_different_colours_meet_on_the_diagonal() {
+    // CSS's arrow: a box of no size, its top border coloured and its sides' transparent.
+    let mut p = page("<body style='margin:0'><div style='width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:10px solid #000'></div></body>");
+    let px = drawn(&mut p, 20, 10);
+    assert_eq!(px[1 * 20 + 10], 0x000000, "the arrow's top middle");
+    assert_eq!(px[8 * 20 + 1], 0xFFFFFF, "its sides are cut away on the diagonals");
+    assert_eq!(px[8 * 20 + 10] & 0xFF, 0, "its point");
+}
+
+#[test]
+fn a_line_too_long_ends_in_an_ellipsis_and_a_clamp_keeps_its_lines() {
+    let mut p = page("<body style='margin:0'><div style='width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>a long line of words to cut</div>\
+                      <div id=c style='width:100px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden'>one two three four five six seven eight nine ten eleven twelve</div></body>");
+    let l = laid(&mut p);
+    let ells = l.items.iter().filter(|i| matches!(&i.paint, Paint::Text { text, .. } if text == "\u{2026}")).count();
+    assert_eq!(ells, 2, "both end in one");
+    assert!(!l.items.iter().any(|i| matches!(&i.paint, Paint::Text { text, .. } if text.contains("twelve"))), "the third line isn't drawn");
+    let (_, y) = words(l, "one");
+    let line = l.items.iter().filter_map(|i| if let Paint::Text { y: ty, .. } = i.paint { Some(ty) } else { None }).fold(0.0f32, f32::max);
+    assert!(line - y < 30.0, "two lines: {y} to {line}");
+}
+
+#[test]
+fn an_animation_leaves_its_box_as_its_last_keyframe_says() {
+    let mut p = page("<style>@keyframes in { from { opacity: 0 } to { opacity: 1; background: #00f } }</style>\
+                      <body style='margin:0'><div style='opacity:0;height:10px;animation:in 1s ease forwards'></div>\
+                      <div style='height:10px;background:#f00;animation:in 1s'></div></body>");
+    let l = laid(&mut p);
+    assert_eq!(rects(l, BLUE).len(), 1, "forwards: its last frame stays");
+    assert_eq!(rects(l, RED).len(), 1, "without: it's as it was once it's over");
+}
+
+#[test]
+fn a_sticky_box_stays_in_view_and_a_fixed_one_with_the_window() {
+    use crate::layout::Scroll;
+    let s = Scroll::Sticky { top: Some(0.0), bottom: None, y: 100.0, h: 20.0, lo: 0.0, hi: 500.0, view: 300.0 };
+    assert_eq!(s.shift(50.0), 0.0, "not yet at the top");
+    assert_eq!(s.shift(150.0), 50.0, "held at the top");
+    assert_eq!(s.shift(600.0), 380.0, "until its containing block's end");
+    assert_eq!(Scroll::Fixed.shift(123.0), 123.0);
+}
+
+#[test]
+fn an_absolutely_positioned_pseudo_element_is_drawn() {
+    let mut p = page("<style>a { position: relative; display: inline-flex; height: 20px } a::after { position: absolute; bottom: 0; left: 0; width: 100%; height: 2px; background: red; content: '' }</style>\
+                      <body style='margin:0'><a>tab</a></body>");
+    let l = laid(&mut p);
+    let r = rects(l, RED);
+    assert_eq!(r.len(), 1, "its line under the tab");
+    assert_eq!((r[0].1, r[0].3), (18.0, 2.0));
+}
+
+#[test]
+fn a_font_is_chosen_by_its_width_before_its_style_and_weight() {
+    use crate::style::{WebFont, pick_font};
+    let face = |stretch: (u16, u16), weight: u16| WebFont {
+        face: crate::css::FontFace { family: String::from("f"), sources: Vec::new(), weight: (weight, weight), italic: false, ranges: Vec::new(), stretch },
+        loaded: None,
+    };
+    let fonts = [face((200, 200), 400), face((100, 100), 700), face((75, 75), 400)];
+    let names = [String::from("f")];
+    assert_eq!(pick_font(&fonts, &names, 400, false, 100).map(|p| p.0), Some(1), "normal width first, whatever its weight");
+    assert_eq!(pick_font(&fonts, &names, 400, false, 87).map(|p| p.0), Some(2), "narrower than normal: the nearest narrower");
+    assert_eq!(pick_font(&fonts, &names, 400, false, 150).map(|p| p.0), Some(0), "wider: the nearest wider");
+    let faces = crate::css::font_faces("@font-face { font-family: f; src: url(a.woff); font-stretch: 75% 125% }");
+    assert_eq!(faces[0].stretch, (75, 125));
 }

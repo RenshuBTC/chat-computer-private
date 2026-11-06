@@ -162,6 +162,7 @@ pub fn init(vm: &mut Vm) {
     storage(vm, w);
     performance(vm, w);
     crypto(vm, w);
+    audio(vm, w);
     urls(vm);
     text_coding(vm);
     abort(vm);
@@ -1076,6 +1077,95 @@ fn performance_json(vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
 fn performance_observer_new(vm: &mut Vm, nt: &Value, _args: &[Value], _f: Gc) -> R {
     let p = proto_from(vm, nt, "PerformanceObserver")?;
     Ok(Value::Obj(vm.alloc(Some(p), Class::Ordinary)))
+}
+
+/// Web Audio's AudioContext (and webkitAudioContext), as far as pages look for it (YouTube shows its voice search
+/// button where there's one): its state and clock, and nodes that connect but play nothing.
+fn audio(vm: &mut Vm, w: Gc) {
+    let ap = interface(vm, "AudioContext", Some("EventTarget"), 0, Some(audio_context_new));
+    let nodes = [
+        "createGain",
+        "createOscillator",
+        "createAnalyser",
+        "createBiquadFilter",
+        "createBufferSource",
+        "createMediaElementSource",
+        "createMediaStreamSource",
+        "createMediaStreamDestination",
+        "createDynamicsCompressor",
+        "createScriptProcessor",
+        "createChannelMerger",
+        "createChannelSplitter",
+        "createPanner",
+        "createStereoPanner",
+        "createDelay",
+        "createConvolver",
+        "createWaveShaper",
+        "createConstantSource",
+        "createBuffer",
+    ];
+    for name in nodes {
+        method(vm, ap, name, 0, audio_node);
+    }
+    for name in ["resume", "suspend", "close"] {
+        method(vm, ap, name, 0, resolved_undefined);
+    }
+    method(vm, ap, "decodeAudioData", 1, rejected_fn);
+    if let Some(ctor) = super::events::ctor_of(vm, ap) {
+        vm.put(w, "webkitAudioContext", ctor, HIDDEN);
+    }
+}
+
+fn audio_context_new(vm: &mut Vm, nt: &Value, _args: &[Value], _f: Gc) -> R {
+    let p = proto_from(vm, nt, "AudioContext")?;
+    let o = vm.alloc(Some(p), Class::Ordinary);
+    vm.put(o, "state", js("suspended"), ALL);
+    vm.put(o, "sampleRate", Value::Num(48000.0), ALL);
+    vm.put(o, "currentTime", Value::Num(0.0), ALL);
+    vm.put(o, "baseLatency", Value::Num(0.01), ALL);
+    vm.put(o, "outputLatency", Value::Num(0.0), ALL);
+    let dest = audio_node(vm, &Value::Undefined, &[], _f)?;
+    if let Value::Obj(d) = dest {
+        vm.put(d, "maxChannelCount", Value::Num(2.0), ALL);
+    }
+    vm.put(o, "destination", dest, ALL);
+    vm.put(o, "onstatechange", Value::Null, ALL);
+    Ok(Value::Obj(o))
+}
+
+/// An audio node: it connects and disconnects, starts and stops, and has the params nodes have (each a value that
+/// takes changes), and plays nothing.
+fn audio_node(vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
+    let o = vm.new_object();
+    method(vm, o, "connect", 1, audio_connect);
+    for name in ["disconnect", "start", "stop", "getFloatFrequencyData", "getByteFrequencyData", "getFloatTimeDomainData", "getByteTimeDomainData", "setPeriodicWave", "getChannelData", "copyToChannel", "copyFromChannel"] {
+        method(vm, o, name, 0, ignore);
+    }
+    for (name, v) in [("gain", 1.0), ("frequency", 440.0), ("detune", 0.0), ("Q", 1.0), ("pan", 0.0), ("delayTime", 0.0), ("playbackRate", 1.0), ("offset", 1.0), ("threshold", -24.0), ("ratio", 12.0)] {
+        let param = vm.new_object();
+        vm.put(param, "value", Value::Num(v), ALL);
+        vm.put(param, "defaultValue", Value::Num(v), ALL);
+        for m in ["setValueAtTime", "linearRampToValueAtTime", "exponentialRampToValueAtTime", "setTargetAtTime", "setValueCurveAtTime", "cancelScheduledValues", "cancelAndHoldAtTime"] {
+            method(vm, param, m, 2, this_value);
+        }
+        vm.put(o, name, Value::Obj(param), ALL);
+    }
+    vm.put(o, "channelCount", Value::Num(2.0), ALL);
+    vm.put(o, "numberOfInputs", Value::Num(1.0), ALL);
+    vm.put(o, "numberOfOutputs", Value::Num(1.0), ALL);
+    vm.put(o, "fftSize", Value::Num(2048.0), ALL);
+    vm.put(o, "frequencyBinCount", Value::Num(1024.0), ALL);
+    vm.put(o, "type", js("sine"), ALL);
+    Ok(Value::Obj(o))
+}
+
+/// connect(node): the node it's connected to (so connections chain).
+fn audio_connect(_vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    Ok(arg(args, 0))
+}
+
+fn this_value(_vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    Ok(this.clone())
 }
 
 fn crypto(vm: &mut Vm, w: Gc) {

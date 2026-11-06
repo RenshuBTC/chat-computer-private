@@ -181,6 +181,10 @@ pub struct Page {
     img_fired: alloc::collections::BTreeSet<(NodeId, usize)>,
     /// Its scripts drew on a canvas: the page is to be drawn again (not laid out).
     pub repaint: bool,
+    /// The pictures its styles show (backgrounds' and masks' url()s): each address as written, and its resource.
+    style_pictures: BTreeMap<String, usize>,
+    /// How far down the view is scrolled (CSS pixels), for what's fixed to the window.
+    view_scroll: f32,
 }
 
 /// The page's pictures with its canvases' among them (for the painter).
@@ -211,15 +215,22 @@ impl crate::paint::Shown for WithCanvases<'_> {
     }
 }
 
-/// The pictures' sizes, for the layout.
-struct Known<'a>(&'a [Resource]);
+/// The pictures' sizes, and those the styles show by their addresses, for the layout.
+struct Known<'a> {
+    resources: &'a [Resource],
+    images: &'a BTreeMap<String, usize>,
+}
 
 impl Sizes for Known<'_> {
     fn size(&self, n: usize) -> Option<(u32, u32)> {
-        match self.0.get(n).map(|r| &r.state) {
+        match self.resources.get(n).map(|r| &r.state) {
             Some(State::Picture(w, h)) => Some((*w, *h)),
             _ => None,
         }
+    }
+
+    fn image(&self, url: &str) -> Option<usize> {
+        self.images.get(url).copied()
     }
 }
 
@@ -271,6 +282,8 @@ impl Page {
             data_pictures: Vec::new(),
             img_fired: alloc::collections::BTreeSet::new(),
             repaint: false,
+            style_pictures: BTreeMap::new(),
+            view_scroll: 0.0,
         };
         if scripting {
             p.script = Some(Box::new(Script::new(&p.url.to_string(), epoch, view)));
@@ -586,6 +599,52 @@ impl Page {
         }
     }
 
+    /// The pictures the page's styles show (backgrounds' and masks' url()s) that haven't been asked for: asked for
+    /// (each address once; a data: address's bytes as they are).
+    fn fetch_style_pictures(&mut self) {
+        let Some(styles) = self.styles.clone() else { return };
+        let mut wanted: Vec<String> = Vec::new();
+        let all = styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values());
+        for st in all {
+            for layers in [&st.bg, &st.mask].into_iter().flatten() {
+                for img in layers.images.iter().flatten() {
+                    if let crate::effects::Image::Url(u) = img
+                        && !u.starts_with('#')
+                        && !self.style_pictures.contains_key(u)
+                        && !wanted.contains(u)
+                    {
+                        wanted.push(u.clone());
+                    }
+                }
+            }
+        }
+        for address in wanted {
+            if self.style_pictures.len() >= MOST_PICTURES {
+                break;
+            }
+            let r = if address.trim_start().get(..5).is_some_and(|d| d.eq_ignore_ascii_case("data:")) {
+                let hash = address.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+                match self.data_pictures.iter().find(|(h, _)| *h == hash) {
+                    Some((_, r)) => Some(*r),
+                    None => data_url(&address).map(|bytes| {
+                        let r = self.add(Kind::Picture, None, Some(bytes));
+                        self.data_pictures.push((hash, r));
+                        r
+                    }),
+                }
+            } else if let Ok(u) = self.url.join(address.trim().split('#').next().unwrap_or("")) {
+                match self.resources.iter().position(|r| r.kind == Kind::Picture && r.url.as_ref() == Some(&u)) {
+                    Some(i) => Some(i),
+                    None => Some(self.add(Kind::Picture, Some(u), None)),
+                }
+            } else {
+                None
+            };
+            // (One that can't be fetched is noted all the same: it isn't asked for again.)
+            self.style_pictures.insert(address, r.unwrap_or(usize::MAX));
+        }
+    }
+
     /// A web font came: kept (text::loaded), and the page laid out again in it.
     pub fn font_came(&mut self, i: usize, bytes: &[u8]) {
         let id = text::loaded::load(bytes);
@@ -653,6 +712,7 @@ impl Page {
                 self.parse_sheets(view);
                 self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author, fonts: &self.web_fonts }, view, dpr)));
                 self.fetch_fonts();
+                self.fetch_style_pictures();
                 // (An <svg> made before the colours it's drawn in were known: made again.)
                 if self.inline_svgs.iter().any(|(n, _, _, look)| {
                     let (color, paints) = self.svg_look(*n);
@@ -664,7 +724,7 @@ impl Page {
             }
             let styles = self.styles.as_ref().expect("worked out above");
             let mut tree = Tree::build(&self.doc, styles, &mut Picker { of: &self.picture_of });
-            let laid = Layout::new(&mut tree, ty, &Known(&self.resources), w, h, dpr).run();
+            let laid = Layout::new(&mut tree, ty, &Known { resources: &self.resources, images: &self.style_pictures }, w, h, dpr).run();
             self.laid = Some(laid);
             self.laid_for = (w, h, dpr);
             self.changed = false;
@@ -964,6 +1024,7 @@ impl Page {
         if let Some(s) = self.script.as_mut() {
             s.host().scroll.1 = y;
         }
+        self.view_scroll = y;
         self.scrolled = Some(y);
     }
 
@@ -1356,7 +1417,9 @@ impl Page {
     /// The node drawn at `x`, `y` (device pixels from the page's top left), on top.
     pub fn node_at(&self, x: f32, y: f32) -> Option<NodeId> {
         let laid = self.laid.as_ref()?;
-        laid.items.iter().rev().find(|i| i.node.is_some() && i.clip.contains(x, y) && bounds(i).contains(x, y)).and_then(|i| i.node)
+        // (Each item's point: the one clicked, through the transforms of the groups it's in.)
+        let points = crate::paint::points_in_items(&laid.items, x, y, self.view_scroll * self.scale());
+        laid.items.iter().zip(points.iter()).rev().find(|(i, p)| i.node.is_some() && p.is_some_and(|(px, py)| i.clip.contains(px, py) && bounds(i).contains(px, py))).and_then(|(i, _)| i.node)
     }
 
     /// Device pixels to a CSS pixel, as the page was last laid out.
@@ -1757,11 +1820,12 @@ fn key_code(key: &str) -> f64 {
 /// An item's rectangle.
 pub fn bounds(i: &Item) -> Rect {
     match &i.paint {
-        Paint::Rect { x, y, w, h, .. } | Paint::Border { x, y, w, h, .. } | Paint::Gradient { x, y, w, h, .. } | Paint::Picture { x, y, w, h, .. } => {
+        Paint::Rect { x, y, w, h, .. } | Paint::Border { x, y, w, h, .. } | Paint::SidedBorder { x, y, w, h, .. } | Paint::Tiles { x, y, w, h, .. } | Paint::Picture { x, y, w, h, .. } => {
             Rect::new(*x, *y, *w, *h)
         }
         Paint::Text { x, y, w, line, .. } => Rect::new(*x, *y, *w, *line),
         Paint::Shadow { x, y, w, h, .. } => Rect::new(*x, *y, *w, *h),
+        Paint::Begin(_) | Paint::End => Rect::default(),
     }
 }
 

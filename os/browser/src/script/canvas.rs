@@ -2011,82 +2011,6 @@ fn resolve(vm: &Vm, paint: &Paint, m: Matrix) -> Fill {
 }
 
 /// A blend mode's colour, from what's there (`b`) and what's drawn (`s`) (straight colours).
-fn blend(mode: u8, b: [f32; 3], s: [f32; 3]) -> [f32; 3] {
-    let sep = |f: fn(f32, f32) -> f32| [f(b[0], s[0]), f(b[1], s[1]), f(b[2], s[2])];
-    fn screen(b: f32, s: f32) -> f32 {
-        b + s - b * s
-    }
-    fn hard_light(b: f32, s: f32) -> f32 {
-        if s <= 0.5 { b * 2.0 * s } else { screen(b, 2.0 * s - 1.0) }
-    }
-    let lum = |c: [f32; 3]| 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
-    let clip_color = |c: [f32; 3]| {
-        let l = lum(c);
-        let n = c[0].min(c[1]).min(c[2]);
-        let x = c[0].max(c[1]).max(c[2]);
-        let mut c = c;
-        if n < 0.0 && l - n > 1e-6 {
-            c = c.map(|v| l + (v - l) * l / (l - n));
-        }
-        if x > 1.0 && x - l > 1e-6 {
-            c = c.map(|v| l + (v - l) * (1.0 - l) / (x - l));
-        }
-        c
-    };
-    let set_lum = |c: [f32; 3], l: f32| {
-        let d = l - lum(c);
-        clip_color(c.map(|v| v + d))
-    };
-    let sat = |c: [f32; 3]| c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2]);
-    let set_sat = |c: [f32; 3], s: f32| {
-        let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
-        if mx - mn <= 1e-6 {
-            return [0.0; 3];
-        }
-        c.map(|v| (v - mn) * s / (mx - mn))
-    };
-    match mode {
-        0 => sep(|b, s| b * s),
-        1 => sep(screen),
-        2 => sep(|b, s| hard_light(s, b)),
-        3 => sep(f32::min),
-        4 => sep(f32::max),
-        5 => sep(|b, s| {
-            if b <= 0.0 {
-                0.0
-            } else if s >= 1.0 {
-                1.0
-            } else {
-                (b / (1.0 - s)).min(1.0)
-            }
-        }),
-        6 => sep(|b, s| {
-            if b >= 1.0 {
-                1.0
-            } else if s <= 0.0 {
-                0.0
-            } else {
-                1.0 - ((1.0 - b) / s).min(1.0)
-            }
-        }),
-        7 => sep(hard_light),
-        8 => sep(|b, s| {
-            if s <= 0.5 {
-                b - (1.0 - 2.0 * s) * b * (1.0 - b)
-            } else {
-                let d = if b <= 0.25 { ((16.0 * b - 12.0) * b + 4.0) * b } else { draw::libm_sqrt(b) };
-                b + (2.0 * s - 1.0) * (d - b)
-            }
-        }),
-        9 => sep(|b, s| (b - s).abs()),
-        10 => sep(|b, s| b + s - 2.0 * b * s),
-        11 => set_lum(set_sat(s, sat(b)), lum(b)),
-        12 => set_lum(set_sat(b, sat(s)), lum(b)),
-        13 => set_lum(s, lum(b)),
-        _ => set_lum(b, lum(s)),
-    }
-}
-
 /// One pixel drawn on: `s` (straight) at alpha `sa` (its own, the shape's coverage and the global alpha), by `op`,
 /// `k` of it let through by the clip.
 #[inline]
@@ -2114,7 +2038,7 @@ fn put(rgb: &mut [u8], a: &mut u8, s: Rgba, sa: f32, op: Op, k: f32, opaque: boo
     let mut oa;
     match op {
         Op::Blend(mode) => {
-            let b = blend(mode, d, [s[0], s[1], s[2]]);
+            let b = crate::paint::blend_colours(mode, d, [s[0], s[1], s[2]]);
             for j in 0..3 {
                 oc[j] = s[j] * sa * (1.0 - da) + d[j] * da * (1.0 - sa) + sa * da * b[j];
             }

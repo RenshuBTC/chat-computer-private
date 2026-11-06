@@ -407,8 +407,17 @@ drivers.
   out (checked against Chromium drawing the same files, element by element: rem as the root's font size, a flex
   line's height given to what stretches across it, fields as Chrome sizes them): blocks with their margins collapsing, lines of words wrapping round floats,
   flex, grid (its tracks sized by CSS Grid's own algorithm, named areas and auto-placement), tables, positioned boxes,
-  lists; borders solid, dashed, dotted or double, rounded (each corner its
-  own), inset or outset; shadows. It scrolls with the wheel, the arrows and Page Up and Down; a click
+  lists, words cut with an ellipsis and clamped to their lines as Chrome cuts them; borders solid, dashed, dotted or
+  double, rounded (each corner its own), inset or outset, each side its own colour (meeting on the diagonals, as
+  CSS's arrows need); shadows outside and inset. And drawn as Chrome's compositor puts a page together
+  (`browser/src/paint.rs`, `effects.rs`): backgrounds' pictures and gradients (linear, radial, conic, repeating) in
+  layers, each sized, placed and repeated as CSS says; boxes in their stacking contexts' order by z-index; each
+  stacking context with effects drawn into a layer of its own, then filtered (blur, drop shadows, the colour filters,
+  and what's behind it, backdrop-filter), cut to its clip-path, masked (mask-image, alpha or luminance), made
+  see-through, turned (transforms in 2D, what's turned in 3D seen flat from the front) and blended (mix-blend-mode);
+  overflow cut to rounded corners; fixed and sticky boxes kept in place as the page scrolls; and where an animation
+  leaves a box (its keyframes' last, or first for one that goes on), as it is a moment after the page has come. It
+  scrolls with the wheel, the arrows and Page Up and Down; a click
   follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter (or its button) sends its
   form (GET or POST), its submit event first. Without a pointer, Tab goes through its links, buttons and fields in
   order (scrolled into view, a blue ring round the one chosen), and Enter or the space bar presses it as a click
@@ -964,10 +973,13 @@ writes for each person, in place of Ubuntu's catalogue.
     heights as Chrome works them out, its form controls' sizes, rem, flex items stretched as it stretches them,
     custom elements constructed once, popovers, each corner rounded its own, box shadows, a flex or grid item's
     children's margins kept inside it, an <svg> filled as the page's style sheets say, CSS Grid's track sizing,
-    custom properties worked out as CSS says (cycles, inherit, initial), web fonts (@font-face, WOFF and WOFF2).
-    Measured by the Web Platform Tests every browser runs (each test and its reference drawn by Chat Computer and
-    compared; the scripted tests run in it): to do there is what they and comparing sites with Chrome turn up, first
-    CSS masks (icons drawn through them), WebP pictures, transforms, animations and writing modes. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
+    custom properties worked out as CSS says (cycles, inherit, initial), web fonts (@font-face, WOFF and WOFF2), a
+    compositor (backgrounds' pictures and gradients, stacking contexts, transforms, opacity, masks, clip-path,
+    filters, backdrop-filter, blending, rounded clipping, fixed and sticky boxes), text-overflow and line clamps,
+    animations' resting states. Measured by the Web Platform Tests every browser runs (each test and its reference
+    drawn by Chat Computer and compared; the scripted tests run in it): to do there is what they and comparing sites
+    with Chrome turn up, first animations as they run (each frame's values between keyframes), WebP pictures,
+    iframes, writing modes, border-image, and SVG backgrounds of no size of their own. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
     plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time
     zone. To do: touchpads.

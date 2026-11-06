@@ -394,6 +394,51 @@ pub struct Sheet {
     pub scope: Option<usize>,
     /// Its @font-face rules' fonts.
     pub fonts: Vec<FontFace>,
+    /// Its @keyframes rules.
+    pub keyframes: Vec<Keyframes>,
+}
+
+/// An @keyframes rule: its name, and each keyframe's places (0 to 1: "from" 0, "to" 1, percentages) and
+/// declarations.
+#[derive(Clone, Debug, Default)]
+pub struct Keyframes {
+    pub name: String,
+    pub frames: Vec<(Vec<f32>, Vec<Decl>)>,
+}
+
+/// An @keyframes rule's name and block read.
+fn keyframes(prelude: &[Tok], inner: &[Tok]) -> Option<Keyframes> {
+    let name = prelude.iter().find_map(|t| match t {
+        Tok::Ident(i) | Tok::Str(i) => Some(i.clone()),
+        _ => None,
+    })?;
+    let mut frames = Vec::new();
+    let mut i = 0;
+    while i < inner.len() {
+        let start = i;
+        while i < inner.len() && inner[i] != Tok::OpenCurly {
+            i += 1;
+        }
+        if i >= inner.len() {
+            break;
+        }
+        let end = block_end(inner, i);
+        let places: Vec<f32> = split_commas(&inner[start..i])
+            .iter()
+            .filter_map(|p| match crate::values::trim(p) {
+                [Tok::Ident(w)] if w.eq_ignore_ascii_case("from") => Some(0.0),
+                [Tok::Ident(w)] if w.eq_ignore_ascii_case("to") => Some(1.0),
+                [Tok::Percent(x)] => Some(x / 100.0),
+                _ => None,
+            })
+            .collect();
+        let decls = declarations(&inner[(i + 1).min(inner.len())..end.min(inner.len())]);
+        if !places.is_empty() {
+            frames.push((places, decls));
+        }
+        i = end + 1;
+    }
+    Some(Keyframes { name, frames })
 }
 
 /// A font an @font-face rule names: for a family, at weights and a style, for some characters, fetched from where
@@ -409,6 +454,24 @@ pub struct FontFace {
     pub italic: bool,
     /// The characters it's for (unicode-range's ranges): none, all of them.
     pub ranges: Vec<(u32, u32)>,
+    /// The widths it's for (font-stretch: percentages of normal, the least and the most).
+    pub stretch: (u16, u16),
+}
+
+/// A font-stretch (font-width) keyword's or percentage's width, as a percentage of normal.
+pub fn stretch_value(w: &str) -> Option<u16> {
+    Some(match w {
+        "ultra-condensed" => 50,
+        "extra-condensed" => 62,
+        "condensed" => 75,
+        "semi-condensed" => 87,
+        "normal" => 100,
+        "semi-expanded" => 112,
+        "expanded" => 125,
+        "extra-expanded" => 150,
+        "ultra-expanded" => 200,
+        p => crate::num::round(p.strip_suffix('%')?.parse::<f32>().ok().filter(|v| *v >= 0.0)?).min(1000.0) as u16,
+    })
 }
 
 impl FontFace {
@@ -526,7 +589,7 @@ pub fn font_faces(css: &str) -> Vec<FontFace> {
         }
         let block = &text[open + 1..end.min(text.len())];
         from = (end + 1).min(text.len());
-        let mut face = FontFace { family: String::new(), sources: Vec::new(), weight: (400, 400), italic: false, ranges: Vec::new() };
+        let mut face = FontFace { family: String::new(), sources: Vec::new(), weight: (400, 400), italic: false, ranges: Vec::new(), stretch: (100, 100) };
         for decl in split_top(block, ';') {
             let Some((name, value)) = decl.split_once(':') else { continue };
             let value = value.trim().trim_end_matches("!important").trim();
@@ -577,6 +640,13 @@ pub fn font_faces(css: &str) -> Vec<FontFace> {
                     if let Some(&a) = ws.first() {
                         let b = ws.get(1).copied().unwrap_or(a);
                         face.weight = (a.min(b), a.max(b));
+                    }
+                }
+                "font-stretch" | "font-width" => {
+                    let ws: Vec<u16> = value.split_ascii_whitespace().filter_map(|w| stretch_value(&w.to_ascii_lowercase())).collect();
+                    if let Some(&a) = ws.first() {
+                        let b = ws.get(1).copied().unwrap_or(a);
+                        face.stretch = (a.min(b), a.max(b));
                     }
                 }
                 "font-style" => {
@@ -678,6 +748,11 @@ fn rules(t: &[Tok], view: Viewport, out: &mut Sheet, depth: u32) {
                             "supports" => {
                                 if supports(prelude) {
                                     rules(inner, view, out, depth + 1);
+                                }
+                            }
+                            "keyframes" | "-webkit-keyframes" | "-moz-keyframes" | "-o-keyframes" => {
+                                if let Some(k) = keyframes(prelude, inner) {
+                                    out.keyframes.push(k);
                                 }
                             }
                             "layer" | "container" | "scope" | "document" | "-moz-document" | "starting-style" => {

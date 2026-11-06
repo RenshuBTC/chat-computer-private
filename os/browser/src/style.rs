@@ -201,14 +201,8 @@ pub enum Align {
     SpaceEvenly,
 }
 
-/// A background layer that isn't a plain colour.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Image {
-    Url(String),
-    /// A linear gradient: its angle (degrees, 180 down) and its colours with where they stop (0..1, or negative
-    /// where not said).
-    Linear(f32, Vec<(Color, f32)>),
-}
+pub use crate::effects::Image;
+use crate::effects::{self, ClipPath, Filter, Layers, LayerProp, ObjectFit, Pos, TFn};
 
 /// grid-template-columns' and -rows' tracks.
 #[derive(Clone, Debug, PartialEq)]
@@ -258,12 +252,15 @@ pub struct Style {
     /// Its corners' rounding: top left, top right, bottom right, bottom left (circular: a percentage of its smaller
     /// side, so 50% rounds a square into a circle).
     pub radius: [Len; 4],
-    /// Its box-shadow: the first outside its border box (an inset one isn't drawn).
-    pub shadow: Option<Shadow>,
+    /// Its box-shadow's shadows (the first on top), outside its border box or (inset) inside its padding box.
+    pub shadows: Option<Arc<Vec<Shadow>>>,
     pub border_box: bool,
     pub color: Color,
     pub background: Color,
-    pub background_image: Option<Image>,
+    /// Its background's pictures and gradients, and how each is sized, placed and repeated (None: the colour alone).
+    pub bg: Option<Arc<Layers>>,
+    /// Its mask's layers: what of it shows (None, or none with a picture: all of it).
+    pub mask: Option<Arc<Layers>>,
     pub font_size: f32,
     /// How many times "medium" its font size is, when it comes from a keyword (medium, small...: the page's own,
     /// or none it inherited unchanged, or em and % of one): 0 when it doesn't. Chrome's medium is 13px rather than 16
@@ -272,6 +269,8 @@ pub struct Style {
     /// Its font family is the generic monospace one alone ("monospace": not "monospace, monospace").
     pub generic_mono: bool,
     pub font_weight: u16,
+    /// font-stretch: a percentage of normal width.
+    pub font_stretch: u16,
     pub italic: bool,
     pub mono: bool,
     /// The family asked for is sans-serif (drawn in the system's sans-serif font; else its serif one).
@@ -285,6 +284,15 @@ pub struct Style {
     pub decoration_color: Option<Color>,
     pub transform_text: Transform,
     pub white_space: WhiteSpace,
+    /// image-rendering: pixelated (or crisp-edges): its pictures made bigger pixel by pixel, not smoothly.
+    pub pixelated: bool,
+    /// text-overflow: ellipsis (a line too long for a box that clips it ends in "…").
+    pub ellipsis: bool,
+    /// -webkit-line-clamp: how many lines are shown (0: all), with display: -webkit-box and -webkit-box-orient:
+    /// vertical, as Chrome has it; and whether its display and orient are those.
+    pub line_clamp: u32,
+    pub webkit_box: bool,
+    pub box_vertical: bool,
     pub vertical_align: VAlign,
     pub list_style: ListStyle,
     pub list_inside: bool,
@@ -294,7 +302,8 @@ pub struct Style {
     pub clip: bool,
     pub z_index: Option<i32>,
     pub aspect_ratio: Option<f32>,
-    pub object_cover: bool,
+    pub object_fit: ObjectFit,
+    pub object_position: (Pos, Pos),
     pub flex_direction: FlexDirection,
     pub flex_wrap: bool,
     pub justify_content: Align,
@@ -320,12 +329,33 @@ pub struct Style {
     pub border_spacing: f32,
     /// ::before's and ::after's content, as words.
     pub content: Option<String>,
-    /// transform: translate(x, y), as lengths (% of its own size).
+    /// Its transform, when it only moves it: by how much (% of its own size). The layout moves it, with all that's
+    /// in it.
     pub translate: (Len, Len),
+    /// transform's functions (None: none), and translate's, rotate's and scale's (applied in that order, before
+    /// transform's).
+    pub transform: Option<Arc<Vec<TFn>>>,
+    pub transform_parts: [Option<TFn>; 3],
+    /// It has a transform that does more than move it: it's drawn through its matrix.
+    pub turned: bool,
+    /// transform-origin (its border box's percentages).
+    pub origin: (Len, Len),
+    /// backface-visibility: hidden (turned to show its back, it isn't drawn).
+    pub backface_hidden: bool,
+    pub filter: Option<Arc<Vec<Filter>>>,
+    pub backdrop: Option<Arc<Vec<Filter>>>,
+    /// mix-blend-mode: 255 for normal.
+    pub blend: u8,
+    pub isolate: bool,
+    pub clip_path: Option<Arc<ClipPath>>,
+    /// contain: paint (strict, content): what's in it clipped to it, and it a stacking context.
+    pub contain_paint: bool,
+    /// will-change names something that makes it a stacking context (transform, opacity, filter...), and whether
+    /// that's a transform (it's then what fixed boxes in it are placed in).
+    pub will_change: bool,
+    pub will_transform: bool,
     pub custom: Arc<BTreeMap<String, Arc<Vec<Tok>>>>,
     pub hidden_text: bool,
-    /// A mask shapes its background (an icon): masks aren't drawn, so neither is the background.
-    pub masked: bool,
     /// A table's caption goes under it (caption-side: bottom).
     pub caption_bottom: bool,
     /// What an <svg>'s shapes are filled and outlined with, as the page's style sheets say (inherited; none: as the
@@ -335,11 +365,87 @@ pub struct Style {
     /// It's absolutely positioned and its display was inline-level before that made it block-level: where it would
     /// have been is on its line, not under it.
     pub inline_origin: bool,
+    /// Its animations (animation's lists, a value an animation).
+    pub animations: Option<Arc<Animations>>,
     /// The font families it asks for, in order, in lower case (font-family's list).
     pub families: Arc<Vec<String>>,
     /// The page's font (text::loaded's number) its words are set in, if one of its families is a web font that has
     /// come; and whether it's made bold and leaned (the face found is lighter, or upright).
     pub web_face: Option<(u16, bool, bool)>,
+}
+
+/// A box's animations' lists (animation-name's, and the others' for each name, repeated where shorter): their
+/// iteration counts (infinity for infinite), directions (0 normal, 1 reverse, 2 alternate, 3 alternate-reverse) and
+/// fill modes (0 none, 1 forwards, 2 backwards, 3 both).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Animations {
+    pub names: Vec<String>,
+    pub counts: Vec<f32>,
+    pub directions: Vec<u8>,
+    pub fills: Vec<u8>,
+}
+
+impl Animations {
+    /// Where in its keyframes (0 to 1) each named animation leaves the box drawn some time after the page has come
+    /// (its animations over, but those that go on for ever): the `i`th's, or None where it leaves it as it is.
+    pub fn resting(&self, i: usize) -> Option<f32> {
+        let count = effects::nth(&self.counts, i, 1.0);
+        let dir = effects::nth(&self.directions, i, 0);
+        let fill = effects::nth(&self.fills, i, 0);
+        if count.is_infinite() {
+            // (One that goes on: its first frame, as it is when it starts again.)
+            return Some(if dir == 1 || dir == 3 { 1.0 } else { 0.0 });
+        }
+        if fill != 1 && fill != 3 {
+            return None;
+        }
+        // (Its last iteration's end: alternating ones turn round each time.)
+        let iterations = crate::num::ceil(count.max(0.0)).max(1.0) as u32;
+        let flipped = match dir {
+            1 => true,
+            2 => iterations.is_multiple_of(2),
+            3 => !iterations.is_multiple_of(2),
+            _ => false,
+        };
+        let frac = count - crate::num::floor(count);
+        let end = if frac > 0.0 { frac } else { 1.0 };
+        Some(if flipped { 1.0 - end } else { end })
+    }
+}
+
+/// animation's value read into its lists (None if it isn't one).
+fn animation_shorthand(v: &[Tok]) -> Option<Animations> {
+    let mut a = Animations::default();
+    for one in css::split_commas(v) {
+        let mut name = String::from("none");
+        let (mut count, mut dir, mut fill) = (1.0f32, 0u8, 0u8);
+        for p in parts(one) {
+            match values::trim(p) {
+                [Tok::Number(n)] => count = n.max(0.0),
+                [Tok::Dimension(..)] | [Tok::Function(_), ..] => {}
+                [Tok::Str(s)] => name = s.clone(),
+                [Tok::Ident(w)] => match w.to_ascii_lowercase().as_str() {
+                    "infinite" => count = f32::INFINITY,
+                    "normal" => dir = 0,
+                    "reverse" => dir = 1,
+                    "alternate" => dir = 2,
+                    "alternate-reverse" => dir = 3,
+                    "forwards" => fill = 1,
+                    "backwards" => fill = 2,
+                    "both" => fill = 3,
+                    "ease" | "linear" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end" | "running" | "paused" | "initial" => {}
+                    "none" => name = String::from("none"),
+                    _ => name = w.clone(),
+                },
+                _ => return None,
+            }
+        }
+        a.names.push(name);
+        a.counts.push(count);
+        a.directions.push(dir);
+        a.fills.push(fill);
+    }
+    Some(a)
 }
 
 /// A web font a page names (@font-face): its face, and its number in text::loaded once it has come.
@@ -371,17 +477,32 @@ fn weight_rank(range: (u16, u16), want: u16) -> u32 {
     class * 10_000 + if above { lo - w } else { w - hi }
 }
 
-/// The web font (its place in `fonts`) CSS's font matching sets a family list's words in at a weight and style: the
-/// first of its families that an @font-face names; of that family's faces, those in its style (or, if it has none,
-/// the others), the nearest in weight, and of those the one for Latin letters (a family whose faces are each for a
-/// part of Unicode, as Google Fonts sends them). With whether it's made bold (a weight of 600 or more from a face
-/// lighter, or from a variable one's range) and leaned (italic from an upright face).
-pub fn pick_font(fonts: &[WebFont], families: &[String], weight: u16, italic: bool) -> Option<(usize, bool, bool)> {
+/// How far a face's widths are from the width asked for, as CSS's font matching orders them (smaller nearer): in its
+/// range, none; asked for normal or narrower, narrower ones first, then wider; asked for wider, wider ones first.
+fn stretch_rank(range: (u16, u16), want: u16) -> u32 {
+    let (lo, hi, w) = (range.0 as u32, range.1 as u32, want as u32);
+    if lo <= w && w <= hi {
+        return 0;
+    }
+    let narrower = hi < w;
+    let first = if w <= 100 { narrower } else { !narrower };
+    (if first { 1 } else { 2 }) * 10_000 + if narrower { w - hi } else { lo - w }
+}
+
+/// The web font (its place in `fonts`) CSS's font matching sets a family list's words in at a weight, width and
+/// style: the first of its families that an @font-face names; of that family's faces, the nearest in width, of those
+/// those in its style (or, if it has none, the others), the nearest in weight, and of those the one for Latin letters
+/// (a family whose faces are each for a part of Unicode, as Google Fonts sends them). With whether it's made bold (a
+/// weight of 600 or more from a face lighter, or from a variable one's range) and leaned (italic from an upright
+/// face).
+pub fn pick_font(fonts: &[WebFont], families: &[String], weight: u16, italic: bool, stretch: u16) -> Option<(usize, bool, bool)> {
     for family in families {
         let faces: Vec<usize> = (0..fonts.len()).filter(|&i| fonts[i].face.family == *family).collect();
         if faces.is_empty() {
             continue;
         }
+        let nearest = faces.iter().map(|&i| stretch_rank(fonts[i].face.stretch, stretch)).min()?;
+        let faces: Vec<usize> = faces.into_iter().filter(|&i| stretch_rank(fonts[i].face.stretch, stretch) == nearest).collect();
         let styled: Vec<usize> = faces.iter().copied().filter(|&i| fonts[i].face.italic == italic).collect();
         let pool = if styled.is_empty() { faces } else { styled };
         let best = pool.iter().map(|&i| weight_rank(fonts[i].face.weight, weight)).min()?;
@@ -462,15 +583,17 @@ impl Style {
             border_style: [BorderStyle::None; 4],
             border_color: [values::BLACK; 4],
             radius: [Len::ZERO; 4],
-            shadow: None,
+            shadows: None,
             border_box: false,
             color: values::BLACK,
             background: values::TRANSPARENT,
-            background_image: None,
+            bg: None,
+            mask: None,
             font_size: 16.0 * dpr,
             keyword_size: 1.0,
             generic_mono: false,
             font_weight: 400,
+            font_stretch: 100,
             italic: false,
             mono: false,
             sans: false,
@@ -483,6 +606,11 @@ impl Style {
             decoration_color: None,
             transform_text: Transform::None,
             white_space: WhiteSpace::Normal,
+            ellipsis: false,
+            pixelated: false,
+            line_clamp: 0,
+            webkit_box: false,
+            box_vertical: false,
             vertical_align: VAlign::Baseline,
             list_style: ListStyle::Disc,
             list_inside: false,
@@ -492,7 +620,8 @@ impl Style {
             clip: false,
             z_index: None,
             aspect_ratio: None,
-            object_cover: false,
+            object_fit: ObjectFit::Fill,
+            object_position: (Pos::CENTER, Pos::CENTER),
             flex_direction: FlexDirection::Row,
             flex_wrap: false,
             justify_content: Align::Normal,
@@ -518,16 +647,60 @@ impl Style {
             border_spacing: 0.0,
             content: None,
             translate: (Len::ZERO, Len::ZERO),
+            transform: None,
+            transform_parts: [None; 3],
+            turned: false,
+            origin: (Len::pct(50.0), Len::pct(50.0)),
+            backface_hidden: false,
+            filter: None,
+            backdrop: None,
+            blend: 255,
+            isolate: false,
+            clip_path: None,
+            contain_paint: false,
+            will_change: false,
+            will_transform: false,
             custom: Arc::new(BTreeMap::new()),
             hidden_text: false,
-            masked: false,
             caption_bottom: false,
             fill: None,
             stroke: None,
             inline_origin: false,
             families: Arc::new(Vec::new()),
             web_face: None,
+            animations: None,
         }
+    }
+
+    /// Its transform's functions, in the order they're applied: translate's, rotate's, scale's, then transform's.
+    pub fn transform_fns(&self) -> Vec<TFn> {
+        let mut out: Vec<TFn> = self.transform_parts.iter().flatten().copied().collect();
+        if let Some(t) = &self.transform {
+            out.extend(t.iter().copied());
+        }
+        out
+    }
+
+    /// Whether it has a transform (a move alone, or none in 2D, "translateZ(0)", counts): it's then what fixed and
+    /// absolutely positioned boxes in it are placed in, and a stacking context.
+    pub fn has_transform(&self) -> bool {
+        self.transform.is_some() || self.transform_parts.iter().any(|t| t.is_some()) || self.will_transform
+    }
+
+    /// What it has that makes it a stacking context, positioned or not (a positioned box with a z-index is one too,
+    /// as are flex and grid items with one: the layout knows which those are).
+    pub fn effects_context(&self) -> bool {
+        self.opacity < 1.0
+            || self.has_transform()
+            || self.filter.is_some()
+            || self.backdrop.is_some()
+            || self.mask.as_ref().is_some_and(|m| m.any())
+            || self.clip_path.is_some()
+            || self.blend != 255
+            || self.isolate
+            || self.contain_paint
+            || self.will_change
+            || matches!(self.position, Position::Fixed | Position::Sticky)
     }
 
     /// What a child starts from: the inherited properties of this one, the rest initial.
@@ -538,6 +711,7 @@ impl Style {
         s.keyword_size = self.keyword_size;
         s.generic_mono = self.generic_mono;
         s.font_weight = self.font_weight;
+        s.font_stretch = self.font_stretch;
         s.italic = self.italic;
         s.mono = self.mono;
         s.sans = self.sans;
@@ -546,6 +720,7 @@ impl Style {
         s.text_indent = self.text_indent;
         s.transform_text = self.transform_text;
         s.white_space = self.white_space;
+        s.pixelated = self.pixelated;
         s.list_style = self.list_style;
         s.list_inside = self.list_inside;
         s.list_image = self.list_image;
@@ -888,7 +1063,7 @@ impl Cascade<'_> {
         if self.fonts.is_empty() || s.families.is_empty() {
             return;
         }
-        if let Some((i, bold, lean)) = pick_font(self.fonts, &s.families, s.font_weight, s.italic) {
+        if let Some((i, bold, lean)) = pick_font(self.fonts, &s.families, s.font_weight, s.italic, s.font_stretch) {
             self.out.wanted_fonts.insert(i);
             s.web_face = self.fonts[i].loaded.map(|id| (id, bold, lean));
         }
@@ -988,6 +1163,39 @@ impl Cascade<'_> {
                 };
                 apply_one(&mut s, &d.name, v, &ctx);
             }
+            if pass == 2
+                && let Some(anims) = s.animations.clone()
+            {
+                // Its animations, as they leave it: their keyframe's declarations over its own (as animations
+                // override the page's declarations), the last named on top.
+                for (i, name) in anims.names.iter().enumerate() {
+                    let Some(at) = anims.resting(i) else { continue };
+                    let Some(k) = self.sheets.iter().rev().flat_map(|sh| sh.keyframes.iter().rev()).find(|k| k.name == *name) else { continue };
+                    for (places, decls) in &k.frames {
+                        if !places.iter().any(|p| (p - at).abs() < 1e-4) {
+                            continue;
+                        }
+                        for dcl in decls {
+                            if dcl.name.starts_with("--") || dcl.name.starts_with("animation") {
+                                continue;
+                            }
+                            let value: Vec<Tok>;
+                            let v: &[Tok] = if has_var(&dcl.value) {
+                                match substitute(&dcl.value, &s.custom, 0) {
+                                    Some(x) => {
+                                        value = x;
+                                        &value
+                                    }
+                                    None => continue,
+                                }
+                            } else {
+                                &dcl.value
+                            };
+                            apply_one(&mut s, &dcl.name, v, &ctx);
+                        }
+                    }
+                }
+            }
             if pass == 0 {
                 // (A keyword's size, medium's 13px in the generic monospace family alone, as Chrome makes it.)
                 if s.keyword_size > 0.0 {
@@ -1001,13 +1209,30 @@ impl Cascade<'_> {
             }
         }
         let _ = pseudo;
+        // A clamped -webkit-box (display: -webkit-box, -webkit-box-orient: vertical, -webkit-line-clamp): laid out as
+        // a block, its lines after the clamp's left out, as Chrome lays one out.
+        if s.line_clamp > 0 && s.webkit_box && s.box_vertical {
+            s.display = if s.display == Display::InlineFlex { Display::InlineBlock } else { Display::FlowRoot };
+        } else {
+            s.line_clamp = 0;
+        }
+        // Its transform: a move alone is the layout's; anything more is drawn through its matrix.
+        s.translate = (Len::ZERO, Len::ZERO);
+        s.turned = false;
+        if s.transform.is_some() || s.transform_parts.iter().any(|t| t.is_some()) {
+            match effects::only_moves(&s.transform_fns()) {
+                Some(t) => s.translate = t,
+                None => s.turned = true,
+            }
+        }
         // Blockified: floats, absolutely positioned boxes, the root, and flex and grid items.
-        let parent_display = self.doc.parent_element(id).and_then(|p| self.out.of.get(p).and_then(|x| x.as_ref())).map(|p| p.display);
+        // (A ::before's or ::after's box is in its element's: a flex item of a flex container's.)
+        let parent_display = if pseudo { Some(parent.display) } else { self.doc.parent_element(id).and_then(|p| self.out.of.get(p).and_then(|x| x.as_ref())).map(|p| p.display) };
         let in_flex = matches!(parent_display, Some(Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid));
         if s.out_of_flow() {
             s.inline_origin = s.display.is_inline_level();
         }
-        if (s.float != Float::None || s.out_of_flow() || is_root || in_flex) && !pseudo {
+        if s.float != Float::None || s.out_of_flow() || (is_root && !pseudo) || in_flex {
             s.display = s.display.blockified();
         }
         if s.out_of_flow() {
@@ -1682,7 +1907,8 @@ fn keyword_size(v: &[Tok], c: &Ctx) -> f32 {
     }
 }
 
-/// A box shadow: how far it's moved (x, y), its blur radius and spread (device pixels), and its colour.
+/// A box shadow: how far it's moved (x, y), its blur radius and spread (device pixels), its colour, and whether it's
+/// cast inside the box (inset).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shadow {
     pub x: f32,
@@ -1690,10 +1916,15 @@ pub struct Shadow {
     pub blur: f32,
     pub spread: f32,
     pub color: Color,
+    pub inset: bool,
 }
 
-/// The first of a box-shadow's shadows that's outside the box (none: "none", or only inset ones).
-fn box_shadow(v: &[Tok], units: &Units, current: Color) -> Option<Shadow> {
+/// box-shadow's shadows: Some(None) for none, None if it isn't a valid value.
+fn box_shadow(v: &[Tok], units: &Units, current: Color) -> Option<Option<Arc<Vec<Shadow>>>> {
+    if ident(v).as_deref() == Some("none") {
+        return Some(None);
+    }
+    let mut out = Vec::new();
     for one in css::split_commas(v) {
         let mut lengths: Vec<f32> = Vec::new();
         let mut color = None;
@@ -1705,15 +1936,17 @@ fn box_shadow(v: &[Tok], units: &Units, current: Color) -> Option<Shadow> {
                 lengths.push(l.px);
             } else if let Some(c) = values::color(t, current) {
                 color = Some(c);
+            } else {
+                return None;
             }
         }
-        if inset || lengths.len() < 2 {
-            continue;
+        if lengths.len() < 2 || lengths.len() > 4 {
+            return None;
         }
         let at = |i: usize| lengths.get(i).copied().unwrap_or(0.0);
-        return Some(Shadow { x: at(0), y: at(1), blur: at(2).max(0.0), spread: at(3), color: color.unwrap_or(current) });
+        out.push(Shadow { x: at(0), y: at(1), blur: at(2).max(0.0), spread: at(3), color: color.unwrap_or(current), inset });
     }
-    None
+    Some(Some(Arc::new(out)))
 }
 
 /// Whether a font-family is the generic monospace family alone.
@@ -1840,78 +2073,27 @@ fn line_height(v: &[Tok], c: &Ctx, size: f32) -> Option<LineHeight> {
     Some(LineHeight::Px((l.px + l.pct * size / 100.0).max(0.0)))
 }
 
-fn gradient(f: &str, inner: &[Tok], current: Color) -> Option<Image> {
-    let args = css::split_commas(inner);
-    let mut angle = 180.0f32;
-    let mut stops_from = 0;
-    if let Some(first) = args.first() {
-        let p = parts(first);
-        if let Some(a) = p.first().and_then(|t| t.first()).and_then(values::angle).filter(|_| matches!(p.first().and_then(|t| t.first()), Some(Tok::Dimension(..)))) {
-            angle = a;
-            stops_from = 1;
-        } else if let Some(Tok::Ident(to)) = p.first().and_then(|t| t.first())
-            && to.eq_ignore_ascii_case("to")
-        {
-            let words: Vec<String> = p.iter().skip(1).filter_map(|x| ident(x)).collect();
-            let has = |w: &str| words.iter().any(|x| x == w);
-            angle = match (has("top"), has("bottom"), has("left"), has("right")) {
-                (true, _, false, false) => 0.0,
-                (_, true, false, false) => 180.0,
-                (false, false, true, _) => 270.0,
-                (false, false, _, true) => 90.0,
-                (true, _, _, true) => 45.0,
-                (_, true, _, true) => 135.0,
-                (_, true, true, _) => 225.0,
-                (true, _, true, _) => 315.0,
-                _ => 180.0,
-            };
-            stops_from = 1;
-        }
-    }
-    if f.contains("radial") || f.contains("conic") {
-        // A radial or conic gradient: its colours, drawn as a linear one from the first to the last.
-        stops_from = usize::from(args.first().is_some_and(|a| values::color(values::trim(parts(a).first().copied().unwrap_or(&[])), current).is_none()));
-        angle = 180.0;
-    }
-    let mut stops = Vec::new();
-    for a in args.iter().skip(stops_from) {
-        let p = parts(a);
-        let Some(col) = p.first().and_then(|x| values::color(x, current)) else { continue };
-        let at = p.get(1).and_then(|x| match x.first() {
-            Some(Tok::Percent(n)) => Some(n / 100.0),
-            _ => None,
-        });
-        stops.push((col, at.unwrap_or(-1.0)));
-    }
-    if stops.is_empty() {
-        return None;
-    }
-    Some(Image::Linear(angle, stops))
-}
-
-fn background_layers(v: &[Tok], s: &mut Style, current: Color, colour_too: bool) {
-    // The last layer's colour; the first image (url() or a gradient).
+/// A background shorthand not read whole: the last layer's colour and the first picture or gradient, as best they can
+/// be found.
+fn background_layers(v: &[Tok], s: &mut Style, current: Color, units: &Units) {
     let layers = css::split_commas(v);
     let mut image = None;
     for (n, layer) in layers.iter().enumerate() {
         for p in parts(layer) {
-            match values::trim(p) {
-                [Tok::Url(u)] if image.is_none() => image = Some(Image::Url(u.clone())),
-                [Tok::Function(f), Tok::Str(u), Tok::CloseParen] if f == "url" && image.is_none() => image = Some(Image::Url(u.clone())),
-                [Tok::Function(f), rest @ ..] if f.contains("gradient") && image.is_none() => {
-                    image = gradient(f, &rest[..rest.len().saturating_sub(1)], current);
-                }
-                _ => {
-                    if colour_too && n == layers.len() - 1
-                        && let Some(c) = values::color(p, current)
-                    {
-                        s.background = c;
-                    }
-                }
+            if image.is_none()
+                && let Some(Some(i)) = effects::image(p, current, units)
+            {
+                image = Some(i);
+                continue;
+            }
+            if n == layers.len() - 1
+                && let Some(c) = values::color(p, current)
+            {
+                s.background = c;
             }
         }
     }
-    s.background_image = image;
+    s.bg = image.map(|i| Arc::new(Layers { images: alloc::vec![Some(i)], ..Default::default() }));
 }
 
 fn grid_place(v: &[Tok]) -> GridPlace {
@@ -2047,7 +2229,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
             "initial" | "unset" | "revert" | "revert-layer" => {
                 let init = Style::initial(c.units.dpr);
-                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "visibility" | "list-style-type" | "text-transform" | "font-family" | "font" | "fill" | "stroke");
+                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "visibility" | "list-style-type" | "text-transform" | "font-family" | "font" | "fill" | "stroke" | "image-rendering");
                 if kw == "initial" || !inherited {
                     inherit_one(s, &init, name);
                 } else {
@@ -2065,7 +2247,75 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             let words: Vec<String> = parts(v).iter().filter_map(|x| ident(x)).collect();
             if let Some(d) = display_value(&words.join(" ")) {
                 s.display = d;
+                s.webkit_box = matches!(words.join(" ").as_str(), "-webkit-box" | "-webkit-inline-box");
             }
+        }
+        "text-overflow" => s.ellipsis = parts(v).iter().filter_map(|x| ident(x)).last().as_deref() == Some("ellipsis"),
+        "image-rendering" => {
+            if let Some(w) = ident(v) {
+                s.pixelated = matches!(w.as_str(), "pixelated" | "crisp-edges" | "-moz-crisp-edges" | "-webkit-optimize-contrast" | "optimizespeed" | "optimize-contrast");
+            }
+        }
+        "animation" | "-webkit-animation" => {
+            if let Some(a) = animation_shorthand(v) {
+                s.animations = if a.names.iter().all(|n| n == "none") { None } else { Some(Arc::new(a)) };
+            }
+        }
+        "animation-name" | "-webkit-animation-name" | "animation-iteration-count" | "-webkit-animation-iteration-count" | "animation-direction" | "-webkit-animation-direction" | "animation-fill-mode" | "-webkit-animation-fill-mode" => {
+            let mut a = s.animations.as_deref().cloned().unwrap_or_default();
+            let items = css::split_commas(v);
+            let word = |t: &[Tok]| ident(t).unwrap_or_default();
+            match name.trim_start_matches("-webkit-") {
+                "animation-name" => {
+                    a.names = items
+                        .iter()
+                        .map(|t| match values::trim(t) {
+                            [Tok::Str(x)] => x.clone(),
+                            [Tok::Ident(x)] => x.clone(),
+                            _ => String::from("none"),
+                        })
+                        .collect()
+                }
+                "animation-iteration-count" => {
+                    a.counts = items
+                        .iter()
+                        .map(|t| match values::trim(t) {
+                            [Tok::Number(n)] => n.max(0.0),
+                            _ if word(t) == "infinite" => f32::INFINITY,
+                            _ => 1.0,
+                        })
+                        .collect()
+                }
+                "animation-direction" => {
+                    a.directions = items
+                        .iter()
+                        .map(|t| match word(t).as_str() {
+                            "reverse" => 1,
+                            "alternate" => 2,
+                            "alternate-reverse" => 3,
+                            _ => 0,
+                        })
+                        .collect()
+                }
+                _ => {
+                    a.fills = items
+                        .iter()
+                        .map(|t| match word(t).as_str() {
+                            "forwards" => 1,
+                            "backwards" => 2,
+                            "both" => 3,
+                            _ => 0,
+                        })
+                        .collect()
+                }
+            }
+            s.animations = if a.names.is_empty() || a.names.iter().all(|n| n == "none") { None } else { Some(Arc::new(a)) };
+        }
+        "-webkit-line-clamp" | "line-clamp" => {
+            s.line_clamp = match values::trim(v) {
+                [Tok::Number(n)] if *n >= 1.0 => *n as u32,
+                _ => 0,
+            };
         }
         "position" => {
             if let Some(i) = ident(v) {
@@ -2290,7 +2540,11 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 s.radius[corner] = l;
             }
         }
-        "box-shadow" | "-webkit-box-shadow" => s.shadow = box_shadow(v, units, s.color),
+        "box-shadow" | "-webkit-box-shadow" => {
+            if let Some(sh) = box_shadow(v, units, s.color) {
+                s.shadows = sh;
+            }
+        }
         "box-sizing" => s.border_box = ident(v).as_deref() == Some("border-box"),
         "fill" | "stroke" => {
             let paint = match ident(v).as_deref() {
@@ -2316,14 +2570,91 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 s.background = x;
             }
         }
-        "background" => {
-            s.background = values::TRANSPARENT;
-            background_layers(v, s, cur, true);
+        "background" => match effects::layers_shorthand(v, cur, units, false) {
+            Some((l, colour)) => {
+                s.background = colour.unwrap_or(values::TRANSPARENT);
+                s.bg = if l.any() { Some(Arc::new(l)) } else { None };
+            }
+            None => {
+                // (One not read whole: its colour and first picture, as best they can be found.)
+                s.background = values::TRANSPARENT;
+                background_layers(v, s, cur, units);
+            }
+        },
+        "background-image" | "background-position" | "background-position-x" | "background-position-y" | "background-size" | "-webkit-background-size" | "background-repeat" | "background-origin" | "-webkit-background-origin" | "background-clip" | "-webkit-background-clip" | "background-attachment" => {
+            let prop = layer_prop(name.trim_start_matches("-webkit-").trim_start_matches("background-"));
+            let mut l = s.bg.as_deref().cloned().unwrap_or_default();
+            if effects::set_layer_prop(&mut l, prop, v, cur, units) {
+                s.bg = Some(Arc::new(l));
+            }
         }
-        "background-image" => background_layers(v, s, cur, false),
-        "mask" | "mask-image" | "-webkit-mask" | "-webkit-mask-image" | "-webkit-mask-box-image" => {
-            s.masked = !matches!(ident(v).as_deref(), Some("none" | "initial" | "unset"));
+        "mask" | "-webkit-mask" => {
+            if let Some((l, _)) = effects::layers_shorthand(v, cur, units, true) {
+                s.mask = if l.any() { Some(Arc::new(l)) } else { None };
+            }
         }
+        "mask-image" | "-webkit-mask-image" | "mask-position" | "-webkit-mask-position" | "mask-position-x" | "-webkit-mask-position-x" | "mask-position-y" | "-webkit-mask-position-y" | "mask-size" | "-webkit-mask-size" | "mask-repeat" | "-webkit-mask-repeat" | "mask-origin" | "-webkit-mask-origin" | "mask-clip" | "-webkit-mask-clip" | "mask-mode" | "mask-composite" | "-webkit-mask-composite" => {
+            let prop = layer_prop(name.trim_start_matches("-webkit-").trim_start_matches("mask-"));
+            let mut l = s.mask.as_deref().cloned().unwrap_or_default();
+            if effects::set_layer_prop(&mut l, prop, v, cur, units) {
+                s.mask = Some(Arc::new(l));
+            }
+        }
+        "filter" | "-webkit-filter" => {
+            if let Some(f) = effects::filters(v, cur, units) {
+                s.filter = if f.is_empty() { None } else { Some(Arc::new(f)) };
+            }
+        }
+        "backdrop-filter" | "-webkit-backdrop-filter" => {
+            if let Some(f) = effects::filters(v, cur, units) {
+                s.backdrop = if f.is_empty() { None } else { Some(Arc::new(f)) };
+            }
+        }
+        "mix-blend-mode" => {
+            if let Some(b) = ident(v).and_then(|w| effects::blend_mode(&w)) {
+                s.blend = b;
+            }
+        }
+        "isolation" => s.isolate = ident(v).as_deref() == Some("isolate"),
+        "contain" => {
+            let words: Vec<String> = parts(v).iter().filter_map(|x| ident(x)).collect();
+            s.contain_paint = words.iter().any(|w| matches!(w.as_str(), "paint" | "strict" | "content"));
+        }
+        "will-change" => {
+            let words: Vec<String> = css::split_commas(v).iter().filter_map(|x| ident(x)).collect();
+            s.will_transform = words.iter().any(|w| matches!(w.as_str(), "transform" | "translate" | "rotate" | "scale" | "perspective"));
+            s.will_change = s.will_transform || words.iter().any(|w| matches!(w.as_str(), "opacity" | "filter" | "backdrop-filter" | "mask" | "clip-path" | "mix-blend-mode" | "isolation"));
+        }
+        "object-position" => {
+            if let Some(p) = effects::position(&parts(v), units) {
+                s.object_position = p;
+            }
+        }
+        "transform" | "-webkit-transform" => {
+            if let Some(f) = effects::transform_list(v, units) {
+                s.transform = if f.is_empty() { None } else { Some(Arc::new(f)) };
+            }
+        }
+        "translate" | "rotate" | "scale" => {
+            let t = match name {
+                "translate" => effects::translate_prop(v, units),
+                "rotate" => effects::rotate_prop(v, units),
+                _ => effects::scale_prop(v, units),
+            };
+            if let Some(t) = t {
+                s.transform_parts[match name {
+                    "translate" => 0,
+                    "rotate" => 1,
+                    _ => 2,
+                }] = t;
+            }
+        }
+        "transform-origin" | "-webkit-transform-origin" => {
+            if let Some(o) = effects::origin(v, units) {
+                s.origin = o;
+            }
+        }
+        "backface-visibility" | "-webkit-backface-visibility" => s.backface_hidden = ident(v).as_deref() == Some("hidden"),
         "font-size" => {
             if let Some(x) = font_size(v, c) {
                 s.font_size = x;
@@ -2340,6 +2671,15 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 s.italic = i == "italic" || i == "oblique";
             }
         }
+        "font-stretch" | "font-width" => {
+            let w = match values::trim(v) {
+                [Tok::Percent(p)] if *p >= 0.0 => Some(crate::num::round(*p).min(1000.0) as u16),
+                _ => ident(v).and_then(|w| css::stretch_value(&w)),
+            };
+            if let Some(w) = w {
+                s.font_stretch = w;
+            }
+        }
         "font-family" => {
             (s.mono, s.sans) = family_kind(v);
             s.generic_mono = generic_mono(v);
@@ -2351,6 +2691,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             let mut k = 0;
             s.italic = false;
             s.font_weight = 400;
+            s.font_stretch = 100;
             s.line_height = LineHeight::Normal;
             if let Some(i) = ident(v) {
                 // A system font ("caption", "menu"...).
@@ -2365,7 +2706,10 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                     match i.as_str() {
                         "italic" | "oblique" => s.italic = true,
                         "bold" | "bolder" | "lighter" => s.font_weight = font_weight(t, p.font_weight).unwrap_or(700),
-                        "normal" | "small-caps" | "condensed" | "expanded" | "semi-condensed" | "semi-expanded" => {}
+                        "condensed" | "expanded" | "semi-condensed" | "semi-expanded" | "ultra-condensed" | "extra-condensed" | "extra-expanded" | "ultra-expanded" => {
+                            s.font_stretch = css::stretch_value(&i).unwrap_or(100);
+                        }
+                        "normal" | "small-caps" => {}
                         _ => {
                             if let Some(sz) = font_size(t, c) {
                                 s.font_size = sz;
@@ -2576,14 +2920,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 }
             }
         }
-        "clip-path" => {
-            if let [Tok::Function(f), rest @ ..] = values::trim(v)
-                && f == "inset"
-                && matches!(rest.first(), Some(Tok::Percent(p)) if *p >= 50.0)
-            {
-                s.hidden_text = true;
-            }
-        }
+        "clip-path" | "-webkit-clip-path" => s.clip_path = effects::clip_path(v, units).map(Arc::new),
         "z-index" => {
             s.z_index = match values::trim(v) {
                 [Tok::Number(n)] => Some(*n as i32),
@@ -2598,7 +2935,11 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 _ => None,
             };
         }
-        "object-fit" => s.object_cover = ident(v).as_deref() == Some("cover"),
+        "object-fit" => {
+            if let Some(f) = ident(v).and_then(|w| ObjectFit::from_word(&w)) {
+                s.object_fit = f;
+            }
+        }
         "flex-direction" | "-webkit-flex-direction" => {
             if let Some(i) = ident(v) {
                 s.flex_direction = match i.as_str() {
@@ -2610,7 +2951,8 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
         }
         "-webkit-box-orient" => {
-            if ident(v).as_deref() == Some("vertical") {
+            s.box_vertical = ident(v).as_deref() == Some("vertical");
+            if s.box_vertical {
                 s.flex_direction = FlexDirection::Column;
             }
         }
@@ -2865,43 +3207,6 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
         "content" => {
             s.content = content(v, |_| None);
         }
-        "transform" | "translate" => {
-            let mut tx = Len::ZERO;
-            let mut ty = Len::ZERO;
-            if name == "translate" {
-                let ps = parts(v);
-                if let Some(x) = ps.first().and_then(|t| values::length(t, units, 0.0)) {
-                    tx = x;
-                }
-                if let Some(y) = ps.get(1).and_then(|t| values::length(t, units, 0.0)) {
-                    ty = y;
-                }
-            } else {
-                for t in parts(v) {
-                    if let [Tok::Function(f), rest @ ..] = values::trim(t) {
-                        let inner = &rest[..rest.len().saturating_sub(1)];
-                        let args = css::split_commas(inner);
-                        let a = |k: usize| args.get(k).and_then(|x| values::length(x, units, 0.0)).unwrap_or(Len::ZERO);
-                        match f.as_str() {
-                            "translate" | "translate3d" => {
-                                tx = Len { px: tx.px + a(0).px, pct: tx.pct + a(0).pct };
-                                ty = Len { px: ty.px + a(1).px, pct: ty.pct + a(1).pct };
-                            }
-                            "translatex" => tx = Len { px: tx.px + a(0).px, pct: tx.pct + a(0).pct },
-                            "translatey" => ty = Len { px: ty.px + a(0).px, pct: ty.pct + a(0).pct },
-                            "scale" | "scalex" | "scaley" => {
-                                // scale(0): nothing to see.
-                                if matches!(args.first().map(|x| values::trim(x)), Some([Tok::Number(n)]) if *n == 0.0) {
-                                    s.opacity = 0.0;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            s.translate = (tx, ty);
-        }
         _ => {}
     }
 }
@@ -2929,6 +3234,7 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         }
         "font-weight" => s.font_weight = from.font_weight,
         "font-style" => s.italic = from.italic,
+        "font-stretch" | "font-width" => s.font_stretch = from.font_stretch,
         "font-family" => {
             s.mono = from.mono;
             s.sans = from.sans;
@@ -2948,6 +3254,7 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "line-height" => s.line_height = from.line_height,
         "text-align" => s.text_align = from.text_align,
         "white-space" => s.white_space = from.white_space,
+        "image-rendering" => s.pixelated = from.pixelated,
         "visibility" => s.visible = from.visible,
         "display" => s.display = from.display,
         "position" => s.position = from.position,
@@ -2962,10 +3269,26 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "background" | "background-color" => {
             s.background = from.background;
             if name == "background" {
-                s.background_image = from.background_image.clone();
+                s.bg = from.bg.clone();
             }
         }
-        "background-image" => s.background_image = from.background_image.clone(),
+        "background-image" | "background-position" | "background-position-x" | "background-position-y" | "background-size" | "-webkit-background-size" | "background-repeat" | "background-origin" | "-webkit-background-origin" | "background-clip" | "-webkit-background-clip" | "background-attachment" => {
+            let prop = layer_prop(name.trim_start_matches("-webkit-").trim_start_matches("background-"));
+            s.bg = with_layer_prop(&s.bg, &from.bg, prop);
+        }
+        "mask" | "-webkit-mask" => s.mask = from.mask.clone(),
+        "mask-image" | "-webkit-mask-image" | "mask-position" | "-webkit-mask-position" | "mask-size" | "-webkit-mask-size" | "mask-repeat" | "-webkit-mask-repeat" | "mask-origin" | "-webkit-mask-origin" | "mask-clip" | "-webkit-mask-clip" | "mask-mode" | "mask-composite" | "-webkit-mask-composite" => {
+            let prop = layer_prop(name.trim_start_matches("-webkit-").trim_start_matches("mask-"));
+            s.mask = with_layer_prop(&s.mask, &from.mask, prop);
+        }
+        "filter" | "-webkit-filter" => s.filter = from.filter.clone(),
+        "backdrop-filter" | "-webkit-backdrop-filter" => s.backdrop = from.backdrop.clone(),
+        "mix-blend-mode" => s.blend = from.blend,
+        "isolation" => s.isolate = from.isolate,
+        "clip-path" | "-webkit-clip-path" => s.clip_path = from.clip_path.clone(),
+        "transform-origin" | "-webkit-transform-origin" => s.origin = from.origin,
+        "object-fit" => s.object_fit = from.object_fit,
+        "object-position" => s.object_position = from.object_position,
         "border" => {
             s.border_width = from.border_width;
             s.border_style = from.border_style;
@@ -2984,7 +3307,10 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "flex-direction" => s.flex_direction = from.flex_direction,
         "justify-content" => s.justify_content = from.justify_content,
         "align-items" => s.align_items = from.align_items,
-        "transform" => s.translate = from.translate,
+        "transform" | "-webkit-transform" => s.transform = from.transform.clone(),
+        "translate" => s.transform_parts[0] = from.transform_parts[0],
+        "rotate" => s.transform_parts[1] = from.transform_parts[1],
+        "scale" => s.transform_parts[2] = from.transform_parts[2],
         "border-radius" => s.radius = from.radius,
         "z-index" => s.z_index = from.z_index,
         "content" => s.content = from.content.clone(),
@@ -2993,4 +3319,44 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "stroke" => s.stroke = from.stroke,
         _ => {}
     }
+}
+
+/// Which layer list property a background-* or mask-* name (without its prefix) is.
+fn layer_prop(rest: &str) -> LayerProp {
+    match rest {
+        "image" => LayerProp::Image,
+        "position" => LayerProp::Position,
+        "position-x" => LayerProp::PositionX,
+        "position-y" => LayerProp::PositionY,
+        "size" => LayerProp::Size,
+        "repeat" => LayerProp::Repeat,
+        "origin" => LayerProp::Origin,
+        "clip" => LayerProp::Clip,
+        "attachment" => LayerProp::Attachment,
+        "mode" => LayerProp::Mode,
+        _ => LayerProp::Composite,
+    }
+}
+
+/// `to`'s layers with one property's list taken from `from`'s (inherit, initial).
+fn with_layer_prop(to: &Option<Arc<Layers>>, from: &Option<Arc<Layers>>, prop: LayerProp) -> Option<Arc<Layers>> {
+    let mut l = to.as_deref().cloned().unwrap_or_default();
+    let f = from.as_deref().cloned().unwrap_or_default();
+    match prop {
+        LayerProp::Image => l.images = f.images,
+        LayerProp::Position => {
+            l.pos_x = f.pos_x;
+            l.pos_y = f.pos_y;
+        }
+        LayerProp::PositionX => l.pos_x = f.pos_x,
+        LayerProp::PositionY => l.pos_y = f.pos_y,
+        LayerProp::Size => l.sizes = f.sizes,
+        LayerProp::Repeat => l.repeats = f.repeats,
+        LayerProp::Origin => l.origins = f.origins,
+        LayerProp::Clip => l.clips = f.clips,
+        LayerProp::Attachment => l.fixed = f.fixed,
+        LayerProp::Mode => l.luminance = f.luminance,
+        LayerProp::Composite => l.composite = f.composite,
+    }
+    Some(Arc::new(l))
 }

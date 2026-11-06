@@ -669,6 +669,14 @@ fn path_data(d: &str, b: &mut Builder) {
     }
 }
 
+/// A path's `d` as polygons (each subpath closed, as filling takes it), its points through `m`: for CSS's
+/// clip-path: path().
+pub fn path_polygons(d: &str, m: Matrix) -> Vec<Vec<(f32, f32)>> {
+    let mut b = Builder::new(m);
+    path_data(d, &mut b);
+    b.finish().paths.into_iter().filter(|(p, _)| p.len() >= 3).map(|(p, _)| p).collect()
+}
+
 /// A path's step, as SVG's path data has them (in absolute coordinates).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PathOp {

@@ -400,6 +400,13 @@ fn function(f: &str, inner: &[Tok], current: Color) -> Option<Color> {
     let a = args(inner);
     match f {
         "rgb" | "rgba" => {
+            // (Written with commas, the old way: all three numbers, or all three percentages.)
+            if inner.contains(&Tok::Comma) {
+                let kinds: Vec<bool> = a.iter().take(3).map(|t| matches!(t, Tok::Percent(_))).collect();
+                if kinds.iter().any(|&p| p != kinds[0]) {
+                    return None;
+                }
+            }
             let r = channel(a.first(), 255.0)?;
             let g = channel(a.get(1), 255.0)?;
             let b = channel(a.get(2), 255.0)?;

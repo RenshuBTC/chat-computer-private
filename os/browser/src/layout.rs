@@ -453,6 +453,67 @@ struct Slot {
     cols: usize,
 }
 
+/// A side of a collapsed border (border-collapse: collapse): its width, style and colour, and whose it was (4 a
+/// cell's, 3 a row's, 2 a row group's, 1 the table's).
+#[derive(Clone, Copy, Debug)]
+struct Edge {
+    w: f32,
+    style: BorderStyle,
+    color: Color,
+    whose: u8,
+}
+
+impl Edge {
+    const NONE: Edge = Edge { w: 0.0, style: BorderStyle::None, color: 0, whose: 0 };
+
+    fn of(s: &Style, k: usize, whose: u8) -> Edge {
+        let w = if s.border_style[k] == BorderStyle::None { 0.0 } else { s.border_width[k] };
+        Edge { w, style: s.border_style[k], color: if s.border_current[k] { s.color } else { s.border_color[k] }, whose }
+    }
+
+    fn rank(&self) -> u8 {
+        match self.style {
+            BorderStyle::Double => 8,
+            BorderStyle::Solid => 7,
+            BorderStyle::Dashed => 6,
+            BorderStyle::Dotted => 5,
+            BorderStyle::Ridge => 4,
+            BorderStyle::Outset => 3,
+            BorderStyle::Groove => 2,
+            BorderStyle::Inset => 1,
+            BorderStyle::None => 0,
+        }
+    }
+
+    /// Whether it wins over `o` (CSS 2.1's 17.6.2.1): the wider, then the stronger style, then a cell's over a
+    /// row's over a row group's over the table's (on a tie, the one met first: further up, further left).
+    fn beats(&self, o: &Edge) -> bool {
+        if self.style == BorderStyle::None || self.w <= 0.0 {
+            return false;
+        }
+        if o.style == BorderStyle::None || o.w <= 0.0 {
+            return true;
+        }
+        if self.w != o.w {
+            return self.w > o.w;
+        }
+        if self.rank() != o.rank() {
+            return self.rank() > o.rank();
+        }
+        self.whose > o.whose
+    }
+}
+
+/// A table's collapsed borders: each of its grid's horizontal lines' edges column by column, and each vertical line's
+/// row by row; and where the lines are (from the table's corner), once it's laid out.
+#[derive(Clone, Default)]
+struct Collapsed {
+    h: Vec<Vec<Edge>>,
+    v: Vec<Vec<Edge>>,
+    xs: Vec<f32>,
+    ys: Vec<f32>,
+}
+
 /// A table column's narrowest and widest, and the width its cells give it.
 #[derive(Clone, Copy, Debug, Default)]
 struct Column {
@@ -499,6 +560,12 @@ pub struct Layout<'a> {
     first_lines: alloc::collections::BTreeMap<BoxId, f32>,
     /// Tables' captions' heights, above and below: their backgrounds and borders are round the rest.
     captions: alloc::collections::BTreeMap<BoxId, (f32, f32)>,
+    /// Collapsed tables' borders, and the styles their cells and they had before (their borders made half the
+    /// collapsed ones', for laying out; the borders are drawn by the table).
+    collapsed: alloc::collections::BTreeMap<BoxId, Collapsed>,
+    collapse_src: alloc::collections::BTreeMap<BoxId, Arc<Style>>,
+    /// Each table cell's column group and column boxes (<colgroup>, <col>), whose backgrounds it's drawn over.
+    cell_cols: alloc::collections::BTreeMap<BoxId, Vec<BoxId>>,
     /// The floats placed in each block formatting context being laid out (the innermost last).
     scopes: Vec<Vec<Placed>>,
     /// Boxes' min-content and max-content widths (border box, margins left out), worked out once.
@@ -686,6 +753,9 @@ impl<'a> Layout<'a> {
             lone_markers: BTreeSet::new(),
             first_lines: alloc::collections::BTreeMap::new(),
             captions: alloc::collections::BTreeMap::new(),
+            collapsed: alloc::collections::BTreeMap::new(),
+            collapse_src: alloc::collections::BTreeMap::new(),
+            cell_cols: alloc::collections::BTreeMap::new(),
             scopes: Vec::new(),
             intrinsic: vec![None; n],
             widths: alloc::collections::BTreeMap::new(),
@@ -936,6 +1006,7 @@ impl<'a> Layout<'a> {
         if depth > 200 {
             return (0.0, 0.0);
         }
+        self.collapse_if_table(b);
         self.metrics(b, 0.0);
         let s = self.tree.boxes[b].style.clone();
         let frame = self.frame_w(b);
@@ -1153,6 +1224,7 @@ impl<'a> Layout<'a> {
 
     #[allow(clippy::too_many_arguments)]
     fn block_in(&mut self, b: BoxId, cb_x: f32, top: f32, cb_w: f32, cb_h: Option<f32>, width: Option<f32>, shrink: bool) {
+        self.collapse_if_table(b);
         // (A width given by its container comes with its margins and padding worked out by the container.)
         if width.is_none() {
             self.metrics(b, cb_w);
@@ -1270,6 +1342,8 @@ impl<'a> Layout<'a> {
             }
         }
         let h = match inner_h {
+            // (A table's: its rows made as tall, with its captions.)
+            Some(h) if matches!(s.display, Display::Table | Display::InlineTable) && !replaced => content_h.max(h),
             Some(h) => h,
             None => self.clamp_h(b, content_h, cb_h),
         };
@@ -1462,8 +1536,18 @@ impl<'a> Layout<'a> {
             Size::Len(l) if !l.has_pct() => self.content_from(k, l, w, true) + self.frame_w(k) + margins,
             _ => least + margins,
         };
+        // (Over its whole height, when it has one of its own: the floats beside any of it in its way.)
+        let tall = match self.tree.boxes[k].style.height {
+            Size::Len(l) if !l.has_pct() => {
+                let st = self.tree.boxes[k].style.clone();
+                let own = self.content_from(k, l, 0.0, false) + if st.border_box { 0.0 } else { self.frame_h(k) };
+                let m = st.margin[0].len().map_or(0.0, |l| l.px) + st.margin[2].len().map_or(0.0, |l| l.px);
+                (own + m).max(1.0)
+            }
+            _ => 1.0,
+        };
         for _ in 0..200 {
-            let (l, r) = self.band(*at, *at + 1.0, x, x + w);
+            let (l, r) = self.band(*at, *at + tall, x, x + w);
             if r - l >= want - 0.01 || !self.floats_here(*at) {
                 return (l, r - l);
             }
@@ -1839,6 +1923,14 @@ impl<'a> Layout<'a> {
                         if alone && spaced_space == 0.0 && wraps {
                             out.push(Piece::Word { text: String::new(), owner, w: 0.0, space: 0.0, breaks: true, hyphen: false });
                         }
+                    } else if wraps && word.is_empty() {
+                        // (A space run on from a box that doesn't wrap into one that does: the line may break after
+                        // the run, as Chrome breaks "<nobr>X </nobr> X".)
+                        if let Some(Piece::Word { breaks, space, .. }) = out.iter_mut().rev().find(|q| !matches!(q, Piece::Open { .. } | Piece::Close { .. }))
+                            && *space > 0.0
+                        {
+                            *breaks = true;
+                        }
                     }
                 }
                 '\u{a0}' => {
@@ -1982,7 +2074,12 @@ impl<'a> Layout<'a> {
                     // less by it); else below the line.
                     let (_, most) = self.intrinsic(k);
                     let fw = most.min(w) + self.margin_px(k);
-                    let on_this_line = !has_content || used + fw <= room + 0.01;
+                    // (A collapsible space at the line's end so far would hang: it doesn't count.)
+                    let trailing = match line.iter().rev().find(|q| !matches!(q, Piece::Close { .. } | Piece::Out { .. } | Piece::Float { .. })) {
+                        Some(Piece::Word { space, owner, .. }) if !self.tree.boxes[*owner].style.white_space.keeps_spaces() => *space,
+                        _ => 0.0,
+                    };
+                    let on_this_line = !has_content || used - trailing + fw <= room + 0.01;
                     let top = if on_this_line { line_y } else { line_y + line_h };
                     self.place_float(k, x, w, top);
                     if on_this_line {
@@ -2080,7 +2177,8 @@ impl<'a> Layout<'a> {
                     if !text.is_empty() || (solid && space > 0.0) {
                         has_content = true;
                     }
-                    breakable = breaks || space > 0.0;
+                    // (A space is a place to break only where its white-space lets lines wrap: not in a nowrap span.)
+                    breakable = breaks;
                     if breakable {
                         last_break = Some(line.len() + 1);
                     }
@@ -3164,6 +3262,29 @@ impl<'a> Layout<'a> {
     }
 
     /// A cell's colspan (Tree::build keeps it in its style's grid_column span).
+    /// The widths a table's <col>s and <colgroup>s give its columns, column by column (a <col>'s, else its group's).
+    fn col_widths(&self, t: BoxId) -> Vec<Size> {
+        let mut out = Vec::new();
+        for &k in &self.tree.boxes[t].children {
+            let ks = &self.tree.boxes[k].style;
+            match ks.display {
+                Display::TableColumn => out.extend(core::iter::repeat_n(ks.width, self.span_of(k))),
+                Display::TableColumnGroup => {
+                    let cols: Vec<BoxId> = self.tree.boxes[k].children.iter().copied().filter(|&c| self.tree.boxes[c].style.display == Display::TableColumn).collect();
+                    if cols.is_empty() {
+                        out.extend(core::iter::repeat_n(ks.width, self.span_of(k)));
+                    }
+                    for c in cols {
+                        let w = if self.tree.boxes[c].style.width == Size::Auto { ks.width } else { self.tree.boxes[c].style.width };
+                        out.extend(core::iter::repeat_n(w, self.span_of(c)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
     fn span_of(&self, cell: BoxId) -> usize {
         (self.tree.boxes[cell].style.grid_column.span as usize).clamp(1, 1000)
     }
@@ -3199,27 +3320,228 @@ impl<'a> Layout<'a> {
         (slots, columns)
     }
 
-    /// Collapsed borders on a table's edges: where the table's own border is as wide as a cell's there, it's that
-    /// edge's, the cell's side of it not drawn (nor taking room).
-    fn collapse_edges(&mut self, t: BoxId, slots: &[Slot], n: usize, nrows: usize) {
-        let table_border = self.tree.boxes[t].style.border_width;
-        for sl in slots {
-            let last_row = sl.row + sl.rows >= nrows;
-            let mut cs = (*self.tree.boxes[sl.cell].style).clone();
-            let mut changed = false;
-            for (side, outer) in [(0, sl.row == 0), (1, sl.col + sl.cols >= n), (2, last_row), (3, sl.col == 0)] {
-                if outer && table_border[side] > 0.0 && table_border[side] >= cs.border_width[side] && cs.border_width[side] > 0.0 {
-                    cs.border_width[side] = 0.0;
-                    changed = true;
-                }
-            }
-            if changed {
-                self.tree.boxes[sl.cell].style = alloc::sync::Arc::new(cs);
-                if let Some(slot) = self.intrinsic.get_mut(sl.cell) {
-                    *slot = None;
+    /// A table with border-collapse: collapse: its borders collapsed (once for each time it's laid out; its cells'
+    /// styles worked out from those they had).
+    fn collapse_if_table(&mut self, b: BoxId) {
+        let st = &self.tree.boxes[b].style;
+        if matches!(st.display, Display::Table | Display::InlineTable) && matches!(self.tree.boxes[b].content, Content::Children) && (st.border_collapse || self.collapse_src.get(&b).is_some_and(|o| o.border_collapse)) {
+            self.collapse(b);
+        }
+    }
+
+    /// A box's style as it was before its borders were collapsed.
+    fn original(&mut self, b: BoxId) -> Arc<Style> {
+        let now = self.tree.boxes[b].style.clone();
+        self.collapse_src.entry(b).or_insert(now).clone()
+    }
+
+    /// A collapsed table's borders (border-collapse: collapse), as CSS 2.1 resolves them: each edge of its grid the
+    /// border that wins there among its cells', rows', row groups' and the table's own. Each cell then lays out with
+    /// half of each of its edges' widths as its borders, and the table with half of its outer edges' (and no padding),
+    /// as Chrome lays them out; the borders themselves are drawn by the table, over its cells' backgrounds.
+    fn collapse(&mut self, t: BoxId) {
+        let (rows, _) = self.table_rows(t);
+        let (slots, n) = self.table_grid(&rows);
+        let nrows = rows.len();
+        let ts = self.original(t);
+        let mut occ: Vec<Vec<Option<usize>>> = alloc::vec![alloc::vec![None; n]; nrows];
+        for (i, sl) in slots.iter().enumerate() {
+            for row in occ.iter_mut().skip(sl.row).take(sl.rows) {
+                for o in row.iter_mut().skip(sl.col).take(sl.cols) {
+                    *o = Some(i);
                 }
             }
         }
+        let cell_styles: Vec<Arc<Style>> = slots.iter().map(|sl| sl.cell).collect::<Vec<_>>().into_iter().map(|c| self.original(c)).collect();
+        let row_styles: Vec<Option<Arc<Style>>> = rows.iter().map(|(r, _)| *r).collect::<Vec<_>>().into_iter().map(|r| r.map(|r| self.original(r))).collect();
+        // (Each row's group, if it's in one, and whether it starts or ends it.)
+        let groups: Vec<Option<BoxId>> = rows
+            .iter()
+            .map(|(r, _)| {
+                r.and_then(|r| self.tree.boxes[r].parent).filter(|&g| matches!(self.tree.boxes[g].style.display, Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup))
+            })
+            .collect();
+        let group_styles: Vec<Option<Arc<Style>>> = groups.clone().into_iter().map(|g| g.map(|g| self.original(g))).collect();
+        let first_in_group = |r: usize| groups[r].is_some() && (r == 0 || groups[r - 1] != groups[r]);
+        let last_in_group = |r: usize| groups[r].is_some() && (r + 1 == nrows || groups[r + 1] != groups[r]);
+        let mut h = alloc::vec![alloc::vec![Edge::NONE; n]; nrows + 1];
+        for (r, line) in h.iter_mut().enumerate() {
+            for (c, edge) in line.iter_mut().enumerate() {
+                // (Inside a cell over several rows: no line.)
+                if r > 0 && r < nrows && occ[r - 1][c].is_some() && occ[r - 1][c] == occ[r][c] {
+                    continue;
+                }
+                let mut best = Edge::NONE;
+                let mut consider = |e: Edge| {
+                    if e.beats(&best) {
+                        best = e;
+                    }
+                };
+                if r > 0 {
+                    if let Some(i) = occ[r - 1][c] {
+                        consider(Edge::of(&cell_styles[i], 2, 4));
+                    }
+                    if let Some(rs) = &row_styles[r - 1] {
+                        consider(Edge::of(rs, 2, 3));
+                    }
+                    if last_in_group(r - 1)
+                        && let Some(gs) = &group_styles[r - 1]
+                    {
+                        consider(Edge::of(gs, 2, 2));
+                    }
+                }
+                if r < nrows {
+                    if let Some(i) = occ[r][c] {
+                        consider(Edge::of(&cell_styles[i], 0, 4));
+                    }
+                    if let Some(rs) = &row_styles[r] {
+                        consider(Edge::of(rs, 0, 3));
+                    }
+                    if first_in_group(r)
+                        && let Some(gs) = &group_styles[r]
+                    {
+                        consider(Edge::of(gs, 0, 2));
+                    }
+                }
+                if r == 0 {
+                    consider(Edge::of(&ts, 0, 1));
+                }
+                if r == nrows {
+                    consider(Edge::of(&ts, 2, 1));
+                }
+                *edge = best;
+            }
+        }
+        let mut v = alloc::vec![alloc::vec![Edge::NONE; n + 1]; nrows];
+        for (r, line) in v.iter_mut().enumerate() {
+            for (c, edge) in line.iter_mut().enumerate() {
+                if c > 0 && c < n && occ[r][c - 1].is_some() && occ[r][c - 1] == occ[r][c] {
+                    continue;
+                }
+                let mut best = Edge::NONE;
+                let mut consider = |e: Edge| {
+                    if e.beats(&best) {
+                        best = e;
+                    }
+                };
+                if c > 0
+                    && let Some(i) = occ[r][c - 1]
+                {
+                    consider(Edge::of(&cell_styles[i], 1, 4));
+                }
+                if c < n
+                    && let Some(i) = occ[r][c]
+                {
+                    consider(Edge::of(&cell_styles[i], 3, 4));
+                }
+                for (k, at) in [(3usize, c == 0), (1usize, c == n)] {
+                    if !at {
+                        continue;
+                    }
+                    if let Some(rs) = &row_styles[r] {
+                        consider(Edge::of(rs, k, 3));
+                    }
+                    if let Some(gs) = &group_styles[r] {
+                        consider(Edge::of(gs, k, 2));
+                    }
+                    consider(Edge::of(&ts, k, 1));
+                }
+                *edge = best;
+            }
+        }
+        // Each cell's borders, for laying out: half its edges' (the widest along each side).
+        for (i, sl) in slots.iter().enumerate() {
+            let top = (sl.col..sl.col + sl.cols).map(|c| h[sl.row][c].w).fold(0.0f32, f32::max);
+            let bottom = (sl.col..sl.col + sl.cols).map(|c| h[sl.row + sl.rows][c].w).fold(0.0f32, f32::max);
+            let left = (sl.row..sl.row + sl.rows).map(|r| v[r][sl.col].w).fold(0.0f32, f32::max);
+            let right = (sl.row..sl.row + sl.rows).map(|r| v[r][sl.col + sl.cols].w).fold(0.0f32, f32::max);
+            let mut cs = (*cell_styles[i]).clone();
+            Self::half_borders(&mut cs, [top, right, bottom, left]);
+            self.tree.boxes[sl.cell].style = Arc::new(cs);
+            if let Some(slot) = self.intrinsic.get_mut(sl.cell) {
+                *slot = None;
+            }
+        }
+        // The table's: half its outer edges' (the widest along each side), and no padding.
+        let top = h[0].iter().map(|e| e.w).fold(0.0f32, f32::max);
+        let bottom = h[nrows].iter().map(|e| e.w).fold(0.0f32, f32::max);
+        let left = v.iter().map(|l| l[0].w).fold(0.0f32, f32::max);
+        let right = v.iter().map(|l| l[n].w).fold(0.0f32, f32::max);
+        let mut tstyle = (*ts).clone();
+        Self::half_borders(&mut tstyle, [top, right, bottom, left]);
+        tstyle.padding = [Len::ZERO; 4];
+        self.tree.boxes[t].style = Arc::new(tstyle);
+        if let Some(slot) = self.intrinsic.get_mut(t) {
+            *slot = None;
+        }
+        let old = self.collapsed.remove(&t).unwrap_or_default();
+        self.collapsed.insert(t, Collapsed { h, v, xs: old.xs, ys: old.ys });
+    }
+
+    /// A style's borders made half `widths` (to lay out by), drawn by nothing.
+    fn half_borders(s: &mut Style, widths: [f32; 4]) {
+        for k in 0..4 {
+            s.border_width[k] = widths[k] / 2.0;
+            s.border_style[k] = if widths[k] > 0.0 { BorderStyle::Solid } else { BorderStyle::None };
+            s.border_color[k] = values::TRANSPARENT;
+            s.border_current[k] = false;
+        }
+    }
+
+    /// A collapsed table's borders as paints: each edge a rectangle on its grid line (half each side), reaching over
+    /// the corners by half the widest edge across them; the weaker drawn first, so where they meet the winner shows.
+    fn collapsed_paints(&self, t: BoxId) -> Vec<Paint> {
+        let Some(col) = self.collapsed.get(&t) else { return Vec::new() };
+        let (tx, ty) = (self.tree.boxes[t].x, self.tree.boxes[t].y);
+        let (nrows, n) = (col.v.len(), col.h.first().map_or(0, |l| l.len()));
+        if col.xs.len() < n + 1 || col.ys.len() < nrows + 1 {
+            return Vec::new();
+        }
+        let snap = |v: f32| crate::num::round(v);
+        let mut segs: Vec<(Edge, Rect, usize)> = Vec::new();
+        for (r, line) in col.h.iter().enumerate() {
+            for (c, e) in line.iter().enumerate() {
+                if e.w <= 0.0 || e.style == BorderStyle::None {
+                    continue;
+                }
+                // (Across the corners: half the widest upright edge meeting it there.)
+                let across = |cc: usize| {
+                    let up = if r > 0 { col.v[r - 1][cc].w } else { 0.0 };
+                    let down = if r < nrows { col.v[r][cc].w } else { 0.0 };
+                    up.max(down) / 2.0
+                };
+                let (x0, x1) = (tx + col.xs[c] - across(c), tx + col.xs[c + 1] + across(c + 1));
+                let y = ty + col.ys[r];
+                let (y0, y1) = (snap(y - e.w / 2.0), snap(y + e.w / 2.0));
+                segs.push((*e, Rect::new(snap(x0), y0, snap(x1) - snap(x0), (y1 - y0).max(1.0)), 0));
+            }
+        }
+        for (r, line) in col.v.iter().enumerate() {
+            for (c, e) in line.iter().enumerate() {
+                if e.w <= 0.0 || e.style == BorderStyle::None {
+                    continue;
+                }
+                let across = |rr: usize| {
+                    let l = if c > 0 { col.h[rr][c - 1].w } else { 0.0 };
+                    let rt = if c < n { col.h[rr][c].w } else { 0.0 };
+                    l.max(rt) / 2.0
+                };
+                let (y0, y1) = (ty + col.ys[r] - across(r), ty + col.ys[r + 1] + across(r + 1));
+                let x = tx + col.xs[c];
+                let (x0, x1) = (snap(x - e.w / 2.0), snap(x + e.w / 2.0));
+                segs.push((*e, Rect::new(x0, snap(y0), (x1 - x0).max(1.0), snap(y1) - snap(y0)), 3));
+            }
+        }
+        segs.sort_by(|a, b| (a.0.w, a.0.rank(), a.0.whose).partial_cmp(&(b.0.w, b.0.rank(), b.0.whose)).unwrap_or(core::cmp::Ordering::Equal));
+        let mut out = Vec::new();
+        for (e, rect, side) in segs {
+            let mut widths = [0.0f32; 4];
+            widths[side] = if side == 0 { rect.h } else { rect.w };
+            let mut styles = [BorderStyle::None; 4];
+            styles[side] = e.style;
+            out.extend(edge_paints(rect, widths, styles, [e.color; 4], [false; 4], [0.0; 4]));
+        }
+        out
     }
 
     /// Each column's narrowest and widest (min-content and max-content, border boxes), and the width its cells give
@@ -3228,18 +3550,12 @@ impl<'a> Layout<'a> {
     fn table_columns(&mut self, t: BoxId) -> Vec<Column> {
         let (rows, _) = self.table_rows(t);
         let (slots, n) = self.table_grid(&rows);
-        let collapse = self.tree.boxes[t].style.border_collapse;
-        if collapse {
-            self.collapse_edges(t, &slots, n, rows.len());
-        }
         let mut cols = alloc::vec![Column::default(); n];
         let mut spanning: Vec<(usize, usize, f32, f32)> = Vec::new();
         for sl in &slots {
             let (mn, mx) = self.intrinsic(sl.cell);
             let s = self.tree.boxes[sl.cell].style.clone();
-            // (Collapsed borders: a cell's left border is the one before it's right one, counted there.)
-            let shared = if collapse && sl.col > 0 { s.border_width[3] } else { 0.0 };
-            let (mn, mx) = ((mn - shared).max(0.0), (mx - shared).max(0.0));
+            let shared = 0.0;
             // (Its width, as its border box's.)
             let given = match s.width {
                 Size::Len(l) if l.pct == 0.0 => Some(((self.content_from(sl.cell, l, 0.0, true) + if s.border_box { 0.0 } else { self.frame_w(sl.cell) } - shared).max(0.0), false)),
@@ -3261,6 +3577,14 @@ impl<'a> Layout<'a> {
                     _ => (mn, mx),
                 };
                 spanning.push((sl.col, sl.cols, mn, mx));
+            }
+        }
+        // (A <col>'s width: the column's, as a cell's would be.)
+        for (i, w) in self.col_widths(t).into_iter().enumerate().take(n) {
+            match w {
+                Size::Len(l) if l.pct == 0.0 => cols[i].fixed = Some(cols[i].fixed.unwrap_or(0.0).max(l.px)),
+                Size::Len(l) if l.px == 0.0 => cols[i].pct = Some(cols[i].pct.unwrap_or(0.0).max(l.pct)),
+                _ => {}
             }
         }
         for c in cols.iter_mut() {
@@ -3370,9 +3694,22 @@ impl<'a> Layout<'a> {
     /// The columns' widths for table-layout: fixed: as the cells of its first row give them (a length, or a
     /// percentage of the table's), what's left shared evenly among the rest (or, with none, among them all in
     /// proportion).
-    fn fixed_widths(&mut self, slots: &[Slot], n: usize, avail: f32) -> Vec<f32> {
+    fn fixed_widths(&mut self, t: BoxId, slots: &[Slot], n: usize, avail: f32) -> Vec<f32> {
         let mut out: Vec<Option<f32>> = alloc::vec![None; n];
-        for sl in slots.iter().filter(|sl| sl.row == 0) {
+        // (Its <col>s' widths first.)
+        let by_cols: Vec<bool> = {
+            let cw = self.col_widths(t);
+            (0..n)
+                .map(|i| match cw.get(i) {
+                    Some(Size::Len(l)) => {
+                        out[i] = Some(l.resolve(avail));
+                        true
+                    }
+                    _ => false,
+                })
+                .collect()
+        };
+        for sl in slots.iter().filter(|sl| sl.row == 0 && !(sl.col..sl.col + sl.cols).any(|c| by_cols.get(c).copied().unwrap_or(false))) {
             let s = self.tree.boxes[sl.cell].style.clone();
             self.metrics(sl.cell, avail);
             let w = match s.width {
@@ -3418,7 +3755,7 @@ impl<'a> Layout<'a> {
 
     /// A table's insides: its captions, then its rows of cells in its columns (table-layout: auto, or fixed). Returns
     /// their height.
-    fn table(&mut self, b: BoxId, x: f32, y: f32, w: f32, _h: Option<f32>) -> f32 {
+    fn table(&mut self, b: BoxId, x: f32, y: f32, w: f32, given_h: Option<f32>) -> f32 {
         let s = self.tree.boxes[b].style.clone();
         let collapse = s.border_collapse;
         let (sx, sy) = if collapse { (0.0, 0.0) } else { (s.border_spacing, s.border_spacing_v) };
@@ -3445,15 +3782,13 @@ impl<'a> Layout<'a> {
                 below_h += h;
             }
             self.captions.insert(b, (above_h, below_h));
+            self.table_outside(b, x, y + above_h);
             return at - y;
-        }
-        if collapse {
-            self.collapse_edges(b, &slots, n, rows.len());
         }
         let (gx, gw) = (x, w);
         let avail = (gw - sx * (n + 1) as f32).max(0.0);
         let widths = if s.table_fixed && s.width.len().is_some() {
-            self.fixed_widths(&slots, n, avail)
+            self.fixed_widths(b, &slots, n, avail)
         } else {
             let cols = self.table_columns(b);
             Self::column_widths(&cols, avail)
@@ -3470,12 +3805,8 @@ impl<'a> Layout<'a> {
         let mut laid: Vec<(Slot, f32, Option<f32>)> = Vec::with_capacity(slots.len());
         for sl in &slots {
             let end = (sl.col + sl.cols).min(n);
-            // (A collapsed border shared with the cell before or above: drawn once, the cells overlapping on it.)
-            let (ol, ot) = if collapse {
-                (if sl.col > 0 { self.tree.boxes[sl.cell].style.border_width[3] } else { 0.0 }, if sl.row > 0 { self.tree.boxes[sl.cell].style.border_width[0] } else { 0.0 })
-            } else {
-                (0.0, 0.0)
-            };
+            // (Collapsed borders: each cell's are half its edges', the cells side by side on the grid's lines.)
+            let (ol, ot) = (0.0, 0.0);
             let cw = col_x[end] - col_x[sl.col] - sx + ol;
             self.metrics(sl.cell, cw);
             self.block(sl.cell, col_x[sl.col] - ol, 0.0, cw, None, Some(cw), false);
@@ -3521,6 +3852,18 @@ impl<'a> Layout<'a> {
                 }
             }
         }
+        // (A table taller than its rows: the room left shared among them, in proportion to their heights (evenly, if
+        // they've none), as Chrome shares it.)
+        if let Some(want) = given_h {
+            let grid: f32 = heights.iter().sum::<f32>() + sy * (nrows + 1) as f32;
+            if want > grid + 0.01 && nrows > 0 {
+                let extra = want - grid;
+                let total: f32 = heights.iter().sum();
+                for hgt in heights.iter_mut() {
+                    *hgt += if total > 0.0 { extra * *hgt / total } else { extra / nrows as f32 };
+                }
+            }
+        }
         let mut row_y = alloc::vec![0.0f32; nrows + 1];
         row_y[0] = at + sy;
         for r in 0..nrows {
@@ -3529,7 +3872,7 @@ impl<'a> Layout<'a> {
         // Each cell in its rows, as tall as they are, its content where its vertical-align puts it.
         for (sl, _, bl) in &laid {
             let cell = sl.cell;
-            let ot = if collapse && sl.row > 0 { self.tree.boxes[cell].style.border_width[0] } else { 0.0 };
+            let ot = 0.0;
             let last = sl.row + sl.rows - 1;
             let top = row_y[sl.row] - ot;
             let full = row_y[last] + heights[last] - top;
@@ -3550,17 +3893,75 @@ impl<'a> Layout<'a> {
             }
             self.tree.boxes[cell].h = full;
         }
+        // (Rows from their first column's start to their last's end: border-spacing round them isn't theirs.)
+        let (rows_x, rows_w) = (col_x[0], (col_x[n] - sx - col_x[0]).max(0.0));
+        // (Its <col>s and <colgroup>s: over their columns, from the first row's top to the last's bottom: their
+        // backgrounds drawn there, under the rows and cells.)
+        let (grid_y, grid_h) = (row_y[0], (row_y[nrows] - sy - row_y[0]).max(0.0));
+        let mut c = 0usize;
+        let mut col_boxes: Vec<(BoxId, usize, usize)> = Vec::new();
+        for k in self.tree.boxes[b].children.clone() {
+            let kd = self.tree.boxes[k].style.display;
+            let mut place = |me: &mut Self, k: BoxId, from: usize, span: usize| {
+                col_boxes.push((k, from, span));
+                let (a, z) = (from.min(n), (from + span).min(n));
+                let bx = &mut me.tree.boxes[k];
+                bx.x = col_x[a];
+                bx.w = if z > a { col_x[z] - sx - col_x[a] } else { 0.0 };
+                bx.y = grid_y;
+                bx.h = grid_h;
+                bx.done = true;
+            };
+            match kd {
+                Display::TableColumn => {
+                    let span = self.span_of(k);
+                    place(self, k, c, span);
+                    c += span;
+                }
+                Display::TableColumnGroup => {
+                    let start = c;
+                    let cols: Vec<BoxId> = self.tree.boxes[k].children.iter().copied().filter(|&x| self.tree.boxes[x].style.display == Display::TableColumn).collect();
+                    if cols.is_empty() {
+                        c += self.span_of(k);
+                    }
+                    for col in cols {
+                        let span = self.span_of(col);
+                        place(self, col, c, span);
+                        c += span;
+                    }
+                    place(self, k, start, c - start);
+                }
+                _ => {}
+            }
+        }
+        for sl in &slots {
+            let mut over: Vec<BoxId> = col_boxes.iter().filter(|(_, from, span)| *from <= sl.col && sl.col < from + span).map(|(k, _, _)| *k).collect();
+            over.sort_by_key(|&k| self.tree.boxes[k].style.display != Display::TableColumnGroup);
+            if over.is_empty() {
+                self.cell_cols.remove(&sl.cell);
+            } else {
+                self.cell_cols.insert(sl.cell, over);
+            }
+        }
         for (r, (row, _)) in rows.iter().enumerate() {
             if let Some(rb) = row {
                 let rb = &mut self.tree.boxes[*rb];
-                rb.x = gx;
+                rb.x = rows_x;
                 rb.y = row_y[r];
-                rb.w = gw;
+                rb.w = rows_w;
                 rb.h = heights[r];
                 rb.done = true;
             }
         }
         at = row_y[nrows];
+        // (A collapsed table's grid lines, for drawing its borders.)
+        if collapse {
+            let (tx, ty) = (self.tree.boxes[b].x, self.tree.boxes[b].y);
+            if let Some(c) = self.collapsed.get_mut(&b) {
+                c.xs = col_x.iter().map(|x| x - tx).collect();
+                c.ys = row_y.iter().map(|y| y - ty).collect();
+            }
+        }
         // (Below its rows: past its bottom padding and border.)
         let frame_b = self.tree.boxes[b].border[2] + self.tree.boxes[b].padding[2];
         let mut below_h = 0.0;
@@ -3582,15 +3983,45 @@ impl<'a> Layout<'a> {
                 if let (Some(&first), Some(&last)) = (rows.first(), rows.last()) {
                     let (top, bottom) = (self.tree.boxes[first].y, self.tree.boxes[last].y + self.tree.boxes[last].h);
                     let g = &mut self.tree.boxes[k];
-                    g.x = gx;
+                    g.x = rows_x;
                     g.y = top;
-                    g.w = gw;
+                    g.w = rows_w;
                     g.h = bottom - top;
                     g.done = true;
                 }
             }
         }
+        let grid_top = if nrows > 0 { row_y[0] } else { y };
+        self.table_outside(b, gx, grid_top);
         (at - y).max(0.0)
+    }
+
+    /// A table's absolutely positioned boxes straight in it, its row groups or its rows: waiting to be placed where its
+    /// rows start, or their row's.
+    fn table_outside(&mut self, b: BoxId, gx: f32, grid_top: f32) {
+        let mut outside: Vec<(BoxId, f32, f32)> = Vec::new();
+        for &k in &self.tree.boxes[b].children {
+            let kb = &self.tree.boxes[k];
+            if kb.style.out_of_flow() {
+                outside.push((k, gx, grid_top));
+            } else if matches!(kb.style.display, Display::TableHeaderGroup | Display::TableRowGroup | Display::TableFooterGroup | Display::TableRow) {
+                let (kx, ky) = if kb.done { (kb.x, kb.y) } else { (gx, grid_top) };
+                for &r in &kb.children {
+                    let rb = &self.tree.boxes[r];
+                    if rb.style.out_of_flow() {
+                        outside.push((r, kx, ky));
+                    } else if rb.style.display == Display::TableRow {
+                        let (rx, ry) = if rb.done { (rb.x, rb.y) } else { (kx, ky) };
+                        for &c in &rb.children {
+                            if self.tree.boxes[c].style.out_of_flow() {
+                                outside.push((c, rx, ry));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.pending.extend(outside);
     }
 
     // ------------------------------------------------------------------------------------------------ positioned
@@ -3876,6 +4307,8 @@ impl<'a> Layout<'a> {
         enum Step {
             Box(BoxId, Within),
             Close,
+            /// A collapsed table's borders: drawn once what's in it is.
+            Collapsed(BoxId, Clips),
         }
         // The three layers, each clipped as the boxes they're in clip.
         let (mut blocks, mut floats, mut lines): (Vec<Item>, Vec<Item>, Vec<Item>) = (Vec::new(), Vec::new(), Vec::new());
@@ -3886,6 +4319,13 @@ impl<'a> Layout<'a> {
                     blocks.push(Item::end());
                     floats.push(Item::end());
                     lines.push(Item::end());
+                    continue;
+                }
+                Step::Collapsed(t, clips) => {
+                    let node = self.tree.boxes[t].node;
+                    for paint in self.collapsed_paints(t) {
+                        blocks.push(Item { paint, clip: clips.rect, node });
+                    }
                     continue;
                 }
                 Step::Box(b, w) => (b, w),
@@ -3937,6 +4377,9 @@ impl<'a> Layout<'a> {
             }
             let for_abs = if abs_home { content.clone() } else { w.abs.clone() };
             let for_fixed = if fixed_home { content.clone() } else { w.fixed.clone() };
+            if visible && self.collapsed.contains_key(&b) {
+                stack.push(Step::Collapsed(b, w.own.clone()));
+            }
             // Its lines.
             if let Some(frags) = self.frags.get(b).cloned() {
                 for (k, f) in frags.iter().enumerate() {
@@ -4355,6 +4798,27 @@ impl<'a> Layout<'a> {
         if x.is_inline_box() || matches!(x.content, Content::Text(_) | Content::Break) {
             return;
         }
+        // (A table's columns', rows' and their groups' backgrounds are drawn behind each of their cells, as Chrome
+        // draws them: not in the spacing between.)
+        // (Their box shadows are drawn, round them.)
+        let table_part = matches!(x.style.display, Display::TableRow | Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup | Display::TableColumn | Display::TableColumnGroup);
+        if x.style.display == Display::TableCell {
+            let cell = Rect::new(x.x, x.y, x.w, x.h);
+            let mut parts: Vec<BoxId> = self.cell_cols.get(&b).cloned().unwrap_or_default();
+            if let Some(row) = x.parent.filter(|&r| self.tree.boxes[r].style.display == Display::TableRow) {
+                if let Some(g) = self.tree.boxes[row].parent.filter(|&g| matches!(self.tree.boxes[g].style.display, Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup)) {
+                    parts.push(g);
+                }
+                parts.push(row);
+            }
+            let clip = clips.rect.intersect(&cell);
+            for part in parts {
+                if self.tree.boxes[part].done && self.tree.boxes[part].style.visible {
+                    self.paint_background(part, clip, items);
+                }
+            }
+        }
+        let x = &self.tree.boxes[b];
         let clip = clips.rect;
         let s = x.style.clone();
         let node = x.node;
@@ -4372,6 +4836,9 @@ impl<'a> Layout<'a> {
         let shadows = s.shadows.clone().filter(|_| b != 0);
         for sh in shadows.iter().flat_map(|v| v.iter().rev()).filter(|sh| !sh.inset && values::alpha(sh.color) > 0) {
             items.push(Item { paint: Paint::Shadow { x: bx, y: by, w: bw, h: bh, radius, dx: sh.x, dy: sh.y, blur: sh.blur, spread: sh.spread, color: sh.color, inset: false }, clip, node });
+        }
+        if table_part {
+            return;
         }
         if !canvas {
             self.paint_background(b, clip, items);
@@ -4392,6 +4859,9 @@ impl<'a> Layout<'a> {
             self.paint_content(b, &s, node, clip, items);
             return;
         }
+        // (A table's rows', row groups' and columns' borders aren't drawn: in collapsed tables, the table draws the
+        // borders they win.)
+        let border = if matches!(s.display, Display::TableRow | Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup | Display::TableColumn | Display::TableColumnGroup) { [0.0; 4] } else { border };
         let out = edge_paints(Rect::new(bx, by, bw, bh), border, s.border_style, s.border_color, s.border_current, radius);
         // Its outline, round its border box (past its outline-offset), drawn when all of its stacking context is.
         if s.outline_style != BorderStyle::None && s.outline_width > 0.0 {

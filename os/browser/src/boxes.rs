@@ -300,6 +300,12 @@ impl Tree {
                 out
             };
             let in_flow = |tree: &Tree, k: BoxId| !tree.boxes[k].style.out_of_flow();
+            // (A column group holds columns only, and a column nothing: what else is in them isn't shown.)
+            if d == Display::TableColumnGroup || d == Display::TableColumn {
+                let cols: Vec<BoxId> = if d == Display::TableColumnGroup { kept.into_iter().filter(|&k| shown(self, k) == Display::TableColumn).collect() } else { Vec::new() };
+                self.boxes[b].children = cols;
+                continue;
+            }
             let kids = if table {
                 regroup(self, kept, &|t: &Tree, k| in_flow(t, k) && !proper(shown(t, k)), Display::TableRow)
             } else if group {
@@ -843,6 +849,12 @@ impl Builder<'_> {
         // rowspan of 0: to the end of its row group, kept as u32::MAX).
         let span = |a: &str| el.attr(a).and_then(|c| counters::html_integer(c)).filter(|&n| n >= 0);
         let style = match (name, span("colspan"), span("rowspan")) {
+            // (A <col>'s or <colgroup>'s span: the columns it's for.)
+            ("col" | "colgroup", _, _) if span("span").is_some_and(|c| c > 1) => {
+                let mut s = (*style).clone();
+                s.grid_column.span = (span("span").unwrap_or(1) as u32).min(1000);
+                Arc::new(s)
+            }
             ("td" | "th", cols, rows) if cols.is_some_and(|c| c > 1) || rows.is_some_and(|r| r != 1) => {
                 let mut s = (*style).clone();
                 if let Some(c) = cols.filter(|&c| c > 1) {

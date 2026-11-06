@@ -379,10 +379,19 @@ impl Page {
         // (An XHTML document, .xht or .xhtml, is XML: its CDATA sections are just their text, as in its style sheets'
         // "<![CDATA[ ... ]]>".)
         let path = url.path.to_ascii_lowercase();
+        let xhtml = path.ends_with(".xht") || path.ends_with(".xhtml");
         let unwrapped;
-        let html_text = if (path.ends_with(".xht") || path.ends_with(".xhtml")) && html_text.contains("<![CDATA[") {
+        let html_text = if xhtml && html_text.contains("<![CDATA[") {
             unwrapped = html_text.replace("<![CDATA[", "").replace("]]>", "");
             unwrapped.as_str()
+        } else {
+            html_text
+        };
+        // (And its elements named with a prefix bound to SVG's namespace or XHTML's, "<svg:svg>", are those elements.)
+        let unprefixed;
+        let html_text = if xhtml && html_text.contains("xmlns:") {
+            unprefixed = unprefix(html_text);
+            unprefixed.as_str()
         } else {
             html_text
         };
@@ -543,6 +552,23 @@ impl Page {
                         Some(m) if !m.trim().is_empty() && !m.trim().eq_ignore_ascii_case("all") => format!("@media {m} {{\n{css}\n}}"),
                         _ => css,
                     };
+                    // (Its @imports, before it: fetched as linked sheets are.)
+                    if tree.is_none() && css.contains("@import") {
+                        let imports = css::sheet(&css, Viewport { width: 1000.0, height: 800.0 }).imports;
+                        for href in imports {
+                            let Ok(u) = self.url.join(href.trim()) else { continue };
+                            let r = match self.resources.iter().position(|r| r.kind == Kind::Sheet && r.url.as_ref() == Some(&u)) {
+                                Some(r) => r,
+                                None if self.resources.iter().filter(|r| r.kind == Kind::Sheet).count() < MOST_SHEETS => self.add(Kind::Sheet, Some(u), None),
+                                None => continue,
+                            };
+                            let nested: Vec<usize> = self.imports_of.iter().filter(|(s, _)| *s == r).map(|(_, i)| *i).collect();
+                            for i in nested {
+                                self.sources.push(Source::Linked(i));
+                            }
+                            self.sources.push(Source::Linked(r));
+                        }
+                    }
                     match tree {
                         Some(root) => self.sources.push(Source::Scoped(css, root)),
                         None => self.sources.push(Source::Inline(css)),
@@ -3097,3 +3123,24 @@ fn absolute_urls(css: &str, base: &Url) -> String {
 fn unused(_: Data) {
     let _ = vec![0u8];
 }
+
+/// An XML document's elements whose names have a prefix bound to SVG's or XHTML's namespace ("<svg:rect>"), named
+/// without it: as an HTML document would name them.
+fn unprefix(text: &str) -> String {
+    let mut prefixes: Vec<String> = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("xmlns:") {
+        rest = &rest[at + 6..];
+        let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')).collect();
+        let after = rest[name.len()..].trim_start_matches([' ', '=']).trim_start_matches(['"', '\'']);
+        if (after.starts_with("http://www.w3.org/2000/svg") || after.starts_with("http://www.w3.org/1999/xhtml")) && !name.is_empty() && !prefixes.contains(&name) {
+            prefixes.push(name);
+        }
+    }
+    let mut out = String::from(text);
+    for p in prefixes {
+        out = out.replace(&alloc::format!("<{p}:"), "<").replace(&alloc::format!("</{p}:"), "</");
+    }
+    out
+}
+

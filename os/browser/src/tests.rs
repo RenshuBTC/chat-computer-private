@@ -1827,3 +1827,67 @@ fn lines_break_after_hyphens_and_between_ideographs_but_not_before_closing_punct
     assert!(texts.iter().any(|t| t == "well-") && texts.iter().any(|t| t == "known"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "語。") && !texts.iter().any(|t| t == "。"), "{texts:?}");
 }
+
+#[test]
+fn collapsed_borders_are_resolved_halved_and_drawn_by_the_table() {
+    // (Chrome: the 10px table border wins at the outer edges, the 6px cell border between the cells; each cell lays
+    // out with half of each of its edges, the table with half of its outer ones; a row's top border wins over the
+    // cells' none. The borders drawn by the table: none of the 2px blue, which loses everywhere.)
+    let mut p = page("<!doctype html><body style='margin:0'><table id=t style='border-collapse:collapse;border:10px solid red'>\
+                      <tr><td id=a style='border:2px solid blue;padding:0;width:20px;height:20px'></td>\
+                      <td style='border:6px solid lime;padding:0;width:20px;height:20px'></td></tr>\
+                      <tr style='border-top:4px solid black'><td style='padding:0;height:20px'></td><td style='padding:0'></td></tr></table></body>");
+    let l = laid(&mut p);
+    let borders: Vec<(f32, f32, f32, f32, u32)> = l
+        .items
+        .iter()
+        .filter_map(|i| match &i.paint {
+            Paint::Border { x, y, w, h, color, .. } => Some((*x, *y, *w, *h, *color)),
+            Paint::SidedBorder { x, y, w, h, colors, .. } => Some((*x, *y, *w, *h, colors.iter().copied().find(|&c| c != 0).unwrap_or(0))),
+            Paint::Rect { x, y, w, h, color, .. } => Some((*x, *y, *w, *h, *color)),
+            _ => None,
+        })
+        .collect();
+    assert!(!borders.iter().any(|b| b.4 == BLUE), "{borders:?}");
+    assert!(borders.iter().any(|b| b.4 == 0xFF00_FF00 && (b.2 == 6.0 || b.3 == 6.0)), "{borders:?}");
+    assert!(borders.iter().any(|b| b.4 == RED && b.0 == 0.0 && b.2 == 10.0), "the table's left edge: {borders:?}");
+    // (The first cell: 5px in from the table's edge (the table's half of the 10px edge), as wide as the other half,
+    // its 20px and half the 6px edge.)
+    let id = |p: &Page, name: &str| p.doc.descendants(0).find(|&n| p.doc.element(n).is_some_and(|e| e.id() == Some(name))).unwrap();
+    let (t, a) = (id(&p, "t"), id(&p, "a"));
+    let l = laid(&mut p);
+    let rect = |n| l.boxes.iter().find(|(b, _)| *b == n).map(|(_, r)| *r).unwrap();
+    let (tr, ar) = (rect(t), rect(a));
+    assert_eq!((ar.x - tr.x, ar.w), (5.0, 5.0 + 20.0 + 3.0), "{tr:?} {ar:?}");
+}
+
+#[test]
+fn a_nowrap_span_s_words_stay_on_one_line() {
+    // (white-space: nowrap on a span in a block that wraps: its spaces aren't places to break; the line may break
+    // before it, after the block's own space.)
+    let mut p = page("<!doctype html><body style='margin:0;font:16px monospace'><div style='width:10ch'>Some <span style='white-space:nowrap'>text that overflows</span></div></body>");
+    let l = laid(&mut p);
+    let (x, y) = words(l, "text that overflows");
+    let (_, y0) = words(l, "Some");
+    assert!(x == 0.0 && y > y0, "on its own line, whole: {x} {y} {y0}");
+}
+
+#[test]
+fn style_sheets_are_read_as_css_reads_errors() {
+    use crate::css::{inline_style, sheet, Viewport};
+    let view = Viewport { width: 800.0, height: 600.0 };
+    // (What's open at the end is closed: the colour's rgb() is whole.)
+    let d = inline_style("color: rgb(0, 128, 0");
+    assert_eq!(d.len(), 1, "{d:?}");
+    // (A line ends a string: the declaration it's in is void, and so is what runs on into it.)
+    let d = inline_style("color: green; font-family: 'Courier;\n color: red; width: 1px");
+    assert!(d.iter().any(|x| x.name == "color") && !d.iter().any(|x| x.name == "font-family") && d.iter().any(|x| x.name == "width"), "{d:?}");
+    // (A block with no selector in a rule's block isn't a rule.)
+    let s = sheet("div { { color: red; } }", view);
+    assert!(s.rules.iter().all(|r| r.decls.iter().all(|d| d.name != "color")), "{:?}", s.rules.len());
+    // (An em space isn't white space: "div\u{2003}p" is one name, no <p> in a <div>.)
+    let mut p = page("<!doctype html><style>div\u{2003}p { color: red }</style><div><p id=x>Text</p></div>");
+    let l = laid(&mut p);
+    let red = l.items.iter().any(|i| matches!(&i.paint, Paint::Text { color: RED, .. }));
+    assert!(!red);
+}

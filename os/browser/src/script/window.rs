@@ -1389,7 +1389,8 @@ pub fn styled_value(vm: &mut Vm, n: NodeId, prop: &str) -> Option<String> {
                 Some(r) if st.display != crate::style::Display::None && !st.display.is_inline_level() || st.display == crate::style::Display::InlineBlock => {
                     let whole = if tall { r.3 } else { r.2 };
                     let (a, b) = if tall { (0, 2) } else { (3, 1) };
-                    let inner = whole * dpr - st.padding[a].px - st.padding[b].px - st.border_width[a] - st.border_width[b];
+                    let bw = |k: usize| if st.border_style[k] == crate::style::BorderStyle::None { 0.0 } else { st.border_width[k] };
+                    let inner = whole * dpr - st.padding[a].px - st.padding[b].px - bw(a) - bw(b);
                     if st.border_box { css_px(whole) } else { px(inner.max(0.0)) }
                 }
                 _ => size(if tall { st.height } else { st.width }),

@@ -759,7 +759,8 @@ impl Style {
             max_height: Size::None,
             margin: [Size::Len(Len::ZERO); 4],
             padding: [Len::ZERO; 4],
-            border_width: [0.0; 4],
+            // (medium, as CSS starts it: nothing drawn, nor taking room, while the style's none.)
+            border_width: [3.0 * dpr; 4],
             border_style: [BorderStyle::None; 4],
             border_color: [values::BLACK; 4],
             border_current: [true; 4],
@@ -1756,7 +1757,7 @@ fn hints(doc: &Document, id: NodeId) -> Vec<Decl> {
         }
     };
     let name = el.name.as_str();
-    if matches!(name, "img" | "table" | "td" | "th" | "col" | "iframe" | "video" | "canvas" | "embed" | "object" | "svg" | "input" | "hr" | "image") {
+    if matches!(name, "img" | "table" | "td" | "th" | "col" | "colgroup" | "iframe" | "video" | "canvas" | "embed" | "object" | "svg" | "input" | "hr" | "image") {
         if let Some(w) = el.attr("width").and_then(dim) {
             add("width", w);
         }
@@ -1787,6 +1788,12 @@ fn hints(doc: &Document, id: NodeId) -> Vec<Decl> {
     }
     if let Some(c) = el.attr("bgcolor") {
         add("background-color", legacy_color(c));
+    }
+    // (A table's bordercolor: its border's colour, as border-color.)
+    if name == "table"
+        && let Some(c) = el.attr("bordercolor")
+    {
+        add("border-color", legacy_color(c));
     }
     if name == "font" {
         if let Some(c) = el.attr("color") {
@@ -2315,6 +2322,12 @@ fn border_width(v: &[Tok], c: &Ctx) -> Option<f32> {
             whole * c.units.dpr
         }),
     }
+}
+
+/// Whether a value is a negative number, length or percentage written out (not a calc()): no width, height or padding
+/// may be, the declaration dropped.
+fn negative(v: &[Tok]) -> bool {
+    matches!(values::trim(v), [Tok::Dimension(n, _)] | [Tok::Number(n)] | [Tok::Percent(n)] if *n < 0.0)
 }
 
 /// "1px solid red" in any order: (width, style, colour).
@@ -3092,32 +3105,32 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
         }
         "width" | "inline-size" => {
-            if let Some(x) = size_value(v, c, 0.0) {
+            if let Some(x) = size_value(v, c, 0.0).filter(|_| !negative(v)) {
                 s.width = x;
             }
         }
         "height" | "block-size" => {
-            if let Some(x) = size_value(v, c, 0.0) {
+            if let Some(x) = size_value(v, c, 0.0).filter(|_| !negative(v)) {
                 s.height = x;
             }
         }
         "min-width" | "min-inline-size" => {
-            if let Some(x) = size_value(v, c, 0.0) {
+            if let Some(x) = size_value(v, c, 0.0).filter(|_| !negative(v)) {
                 s.min_width = x;
             }
         }
         "min-height" | "min-block-size" => {
-            if let Some(x) = size_value(v, c, 0.0) {
+            if let Some(x) = size_value(v, c, 0.0).filter(|_| !negative(v)) {
                 s.min_height = x;
             }
         }
         "max-width" | "max-inline-size" => {
-            if let Some(x) = size_value(v, c, 0.0) {
+            if let Some(x) = size_value(v, c, 0.0).filter(|_| !negative(v)) {
                 s.max_width = x;
             }
         }
         "max-height" | "max-block-size" => {
-            if let Some(x) = size_value(v, c, 0.0) {
+            if let Some(x) = size_value(v, c, 0.0).filter(|_| !negative(v)) {
                 s.max_height = x;
             }
         }
@@ -3146,13 +3159,13 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
         }
         "padding" => {
-            if let Some(x) = four(v, |t| values::length(t, units, 0.0)) {
+            if let Some(x) = four(v, |t| values::length(t, units, 0.0).filter(|_| !negative(t))) {
                 s.padding = x.map(|l| Len { px: l.px.max(0.0), pct: l.pct.max(0.0) });
             }
         }
         "padding-top" | "padding-right" | "padding-bottom" | "padding-left" | "padding-block-start"
         | "padding-inline-end" | "padding-block-end" | "padding-inline-start" => {
-            if let Some(x) = values::length(v, units, 0.0) {
+            if let Some(x) = values::length(v, units, 0.0).filter(|_| !negative(v)) {
                 s.padding[side(name)] = Len { px: x.px.max(0.0), pct: x.pct.max(0.0) };
             }
         }

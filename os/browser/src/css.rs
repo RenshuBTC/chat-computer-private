@@ -24,6 +24,8 @@ pub enum Tok {
     /// A number and its unit (lower case).
     Dimension(f32, String),
     Delim(char),
+    /// A string a line ended before its closing quote: nothing it's in is valid.
+    BadString,
     Ws,
     Colon,
     Semicolon,
@@ -73,6 +75,7 @@ pub fn serialize(t: &[Tok]) -> String {
             Tok::Percent(n) => out.push_str(&alloc::format!("{n}%")),
             Tok::Dimension(n, u) => out.push_str(&alloc::format!("{n}{u}")),
             Tok::Delim(c) => out.push(*c),
+            Tok::BadString => {}
             Tok::Ws => out.push(' '),
             Tok::Colon => out.push(':'),
             Tok::Semicolon => out.push(';'),
@@ -89,6 +92,11 @@ pub fn serialize(t: &[Tok]) -> String {
 }
 
 /// CSS's tokens (comments dropped).
+/// CSS's white space: spaces, tabs and line ends (not the em space or the no-break space: those are letters to it).
+fn css_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}')
+}
+
 pub fn tokens(css: &str) -> Vec<Tok> {
     let chars: Vec<char> = css.chars().collect();
     let mut t = Tokenizer { c: chars, i: 0 };
@@ -155,7 +163,7 @@ impl Tokenizer {
             n += 1;
         }
         if n > 0 {
-            if self.at(0).is_whitespace() {
+            if css_space(self.at(0)) {
                 self.i += 1;
             }
             return match char::from_u32(hex) {
@@ -220,7 +228,11 @@ impl Tokenizer {
             self.i += 1;
             match c {
                 c if c == quote => return Tok::Str(s),
-                '\n' => return Tok::Str(s),
+                '\n' => {
+                    // (The line's end is left for what follows.)
+                    self.i -= 1;
+                    return Tok::BadString;
+                }
                 '\\' => {
                     if self.at(0) == '\n' {
                         self.i += 1;
@@ -234,7 +246,7 @@ impl Tokenizer {
     }
 
     fn url(&mut self) -> Tok {
-        while self.at(0).is_whitespace() {
+        while css_space(self.at(0)) {
             self.i += 1;
         }
         let mut s = String::new();
@@ -246,8 +258,8 @@ impl Tokenizer {
             self.i += 1;
             match c {
                 ')' => return Tok::Url(s),
-                c if c.is_whitespace() => {
-                    while self.at(0).is_whitespace() {
+                c if css_space(c) => {
+                    while css_space(self.at(0)) {
                         self.i += 1;
                     }
                     if self.at(0) == ')' {
@@ -284,8 +296,8 @@ impl Tokenizer {
             break;
         }
         let c = self.at(0);
-        if c.is_whitespace() {
-            while self.at(0).is_whitespace() && self.i < self.c.len() {
+        if css_space(c) {
+            while css_space(self.at(0)) && self.i < self.c.len() {
                 self.i += 1;
             }
             return Some(Tok::Ws);
@@ -330,7 +342,7 @@ impl Tokenizer {
                 let lower = name.to_ascii_lowercase();
                 if lower == "url" {
                     let mut k = 0;
-                    while self.at(k).is_whitespace() {
+                    while css_space(self.at(k)) {
                         k += 1;
                     }
                     if self.at(k) != '"' && self.at(k) != '\'' {
@@ -689,7 +701,7 @@ pub struct Viewport {
 
 /// A style sheet, read.
 pub fn sheet(css: &str, view: Viewport) -> Sheet {
-    let toks = tokens(css);
+    let toks = closed(tokens(css));
     let mut s = Sheet::default();
     rules(&toks, view, &mut s, 0);
     s.fonts = font_faces(css);
@@ -698,7 +710,30 @@ pub fn sheet(css: &str, view: Viewport) -> Sheet {
 
 /// A style attribute's declarations.
 pub fn inline_style(css: &str) -> Vec<Decl> {
-    declarations(&tokens(css))
+    declarations(&closed(tokens(css)))
+}
+
+/// Tokens with what's still open at their end closed, as CSS closes blocks and functions at the end of a style sheet:
+/// "color: rgb(0, 128, 0" is rgb(0, 128, 0).
+fn closed(mut t: Vec<Tok>) -> Vec<Tok> {
+    let mut open: Vec<Tok> = Vec::new();
+    for x in &t {
+        match x {
+            Tok::OpenParen | Tok::Function(_) => open.push(Tok::CloseParen),
+            Tok::OpenSquare => open.push(Tok::CloseSquare),
+            Tok::OpenCurly => open.push(Tok::CloseCurly),
+            Tok::CloseParen | Tok::CloseSquare | Tok::CloseCurly => {
+                if open.last() == Some(x) {
+                    open.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    while let Some(c) = open.pop() {
+        t.push(c);
+    }
+    t
 }
 
 /// Where the block (or bracket) opened at `open` ends: the place of its closing token (or the end).
@@ -723,10 +758,13 @@ fn block_end(t: &[Tok], open: usize) -> usize {
 
 fn rules(t: &[Tok], view: Viewport, out: &mut Sheet, depth: u32) {
     let mut i = 0;
+    // (@import counts only at a sheet's top, before any rule but @charset and @layer's statements.)
+    let mut imports_allowed = depth == 0;
     while i < t.len() {
         match &t[i] {
             Tok::Ws | Tok::Semicolon | Tok::CloseCurly => i += 1,
             Tok::AtKeyword(name) => {
+                let keeps_imports = matches!(name.as_str(), "import" | "charset" | "layer");
                 // Its prelude, up to ";" or its block.
                 let start = i + 1;
                 let mut j = start;
@@ -772,13 +810,17 @@ fn rules(t: &[Tok], view: Viewport, out: &mut Sheet, depth: u32) {
                     }
                     i = end + 1;
                 } else {
-                    if name == "import" {
+                    if name == "import" && imports_allowed {
                         import(prelude, view, out);
                     }
                     i = j + 1;
                 }
+                if !keeps_imports || (name == "layer" && j < t.len() && t[j] == Tok::OpenCurly) {
+                    imports_allowed = false;
+                }
             }
             _ => {
+                imports_allowed = false;
                 // A style rule: its selectors, then its block.
                 let start = i;
                 let mut j = i;
@@ -836,6 +878,11 @@ fn nested(block: &[Tok], parent: &[Tok], view: Viewport, out: &mut Sheet, depth:
         let prelude = &block[start..j];
         let inner = &block[j + 1..end.min(block.len())];
         let first = prelude.iter().find(|t| **t != Tok::Ws);
+        // (A block with no selector before it is no rule: "{ color: red }" in a rule's block goes.)
+        if first.is_none() {
+            i = end + 1;
+            continue;
+        }
         if let Some(Tok::AtKeyword(name)) = first {
             if (name == "media" && media_matches(&prelude[1..], view)) || name == "supports" || name == "layer" {
                 // Its declarations are the parent's, under the condition.
@@ -953,6 +1000,9 @@ fn declaration(t: &[Tok]) -> Option<Decl> {
         return None;
     }
     let mut value: Vec<Tok> = t[i + 1..].to_vec();
+    if value.contains(&Tok::BadString) {
+        return None;
+    }
     // "!important" at its end.
     let mut important = false;
     while value.last() == Some(&Tok::Ws) {

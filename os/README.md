@@ -81,7 +81,8 @@ drivers.
     makes no sense is thrown away. The processor's time-stamp counter is measured at the same time; it
     gives drivers short waits that work with interrupts off, and counts the time since start-up when it runs at
     one speed in every power state (an "invariant" one, as processors of the last 15 years or so have), since
-    ticks are lost while interrupts are off;
+    ticks are lost while interrupts are off. Without one (a virtual PC may not say its counter is invariant), each
+    tick reads the power-management timer instead, which counts on all the same;
   * the processor's other cores (`cores.rs`), up to 64, for the model's arithmetic: each is reset (INIT) wherever
     the firmware left it, then started as every x86 core starts, in 16-bit real mode at a page below 1 MiB named in
     its start-up message. The code there takes it to protected mode, then to 64-bit mode with page tables made for the
@@ -118,8 +119,15 @@ drivers.
   * the PS/2 keyboard controller, which most laptops' built-in keyboards use;
   * then, with interrupts on, the USB controllers start. Interrupts come by MSI-X or MSI. A
     controller that can do neither is checked for work every time the kernel wakes. What is plugged in
-    is found and set up:
-    * USB 2 ports are reset; USB 3 ports enable themselves (a warm reset if one doesn't);
+    is found and set up, the controllers taking turns a port at a time (so a keyboard on one isn't kept waiting
+    while everything on another is set up), and the log says how long each device took and how long all of it did:
+    * USB 2 ports are reset once a plug has settled for 100 ms (waited for once, for everything already plugged in
+      when a controller or a hub starts, not for each); USB 3 ports enable themselves (a warm reset if one doesn't). A
+      device that can't be set up is reset and tried again, once, as Windows and Linux do, and the log says at which
+      step it failed;
+    * a request a device doesn't need to answer (its name, how often it reports, a keyboard's lights) is waited for
+      half a second, what USB 2.0 gives a device for one; what's needed, five seconds. A request that wasn't
+      answered in time is named in the log;
     * hubs, up to five in a row. This includes the USB 2 side of USB 3 hubs, where keyboards appear, and
       the "transaction translator" fields that slow devices behind fast hubs need;
     * keyboards, read as each one's report descriptor says (`hid/`), as Windows reads them: six keys at once, or
@@ -873,8 +881,10 @@ writes for each person, in place of Ubuntu's catalogue.
 2. The real PC: start from its own start-up partition (no USB stick) and show the first screen on its
    monitor, with Secure Boot on and Chat Computer's own key approved, once, on shim's blue screen (or in the PC's
    setup screen). ✓ Started on a real PC (a desktop, 5 November 2026: Secure Boot on, its key approved on shim's
-   blue screen; see "Starting it on a PC"). To do there: typing (its keyboards are read as their report descriptors
-   say since), and its model and listening, which setup now gets ready.
+   blue screen; see "Starting it on a PC"). ✓ There since: typing (a Razer Ornata V3 X, through its second
+   interface), the network (its RTL8125B, by DHCP), and its model answering (Qwen3.5 4B on 16 cores, its 3 GB read
+   in 1.5 s). To do there: listening, and starting faster (its USB devices took 7 seconds to set up: the log now
+   says where the time goes).
 3. ✓ Keyboard: USB (the xHCI controllers, hubs and keyboards) and PS/2 (laptops' built-in keyboards).
    Checked in virtual PCs; on the real PC with step 2.
 4. ✓ All processor cores, for the model's arithmetic (checked in virtual PCs of 2 and 4 cores: the same answer as

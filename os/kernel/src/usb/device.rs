@@ -13,7 +13,7 @@ use super::net::{self, Net};
 use super::storage::{self, Storage};
 use super::xhci::{self, Doorbell, Page, Ring, Trb};
 use super::{changed, sleep, wait, with, Speed};
-use crate::{keyboard, mouse};
+use crate::{keyboard, mouse, time};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -21,6 +21,15 @@ use core::ptr::{read_volatile, write_volatile};
 
 /// The longest control transfer: one page.
 const CONTROL_MAX: usize = 4096;
+/// How long a request may take (ms). USB 2.0 (9.2.6.4) gives a device 50 ms to finish one without data, 500 ms for
+/// each packet of data it sends back, and 5 seconds for one that sends it data. What's needed waits that long, a HID
+/// report descriptor (a keyboard can do without: its boot protocol) twice the 500, and what isn't (a name, a
+/// keyboard's lights, how often it reports) the 500: a device that never answers costs that much, each time.
+const CONTROL_MS: u64 = 5000;
+const REPORT_MS: u64 = 1000;
+const OPTIONAL_MS: u64 = 500;
+/// A device that couldn't be set up, after a port reset, is tried again after another (as Windows and Linux do).
+const TRIES: usize = 2;
 /// USB allows five hubs in a row.
 const MAX_DEPTH: u8 = 5;
 
@@ -87,6 +96,10 @@ pub struct Hub {
     size: u16,
     /// Ports with changes to look at (bit n: port n).
     pub changes: u32,
+    /// When its ports' power was on (time::now_us), and the ports not looked at since: what's plugged into them was
+    /// there by then, so one wait for the plugs to settle does for all of it.
+    powered_us: u64,
+    fresh: u32,
 }
 
 pub struct Device {
@@ -156,6 +169,32 @@ impl Request {
     pub(super) fn to_class(kind: u8, request: u8, value: u16, index: u16) -> Request {
         Request { kind, request, value, index, length: 0 }
     }
+
+    /// What it asks, for the log: "SET_IDLE (value 0x0000, index 1)".
+    fn describe(&self) -> String {
+        let class = self.kind & 0x60 == 0x20;
+        let to = self.kind & 0x1F; // 0: the device, 1: an interface, 3: (a hub's) port
+        let name = match (class, self.request) {
+            (false, 6) => match self.value >> 8 {
+                1 => "GET_DESCRIPTOR (device)",
+                2 => "GET_DESCRIPTOR (configuration)",
+                3 => "GET_DESCRIPTOR (string)",
+                0x22 => "GET_DESCRIPTOR (HID report)",
+                _ => "GET_DESCRIPTOR",
+            },
+            (false, SET_CONFIGURATION) => "SET_CONFIGURATION",
+            (false, SET_INTERFACE) => "SET_INTERFACE",
+            (true, HID_SET_REPORT) if to == 1 => "SET_REPORT",
+            (true, HID_SET_IDLE) if to == 1 => "SET_IDLE",
+            (true, HID_SET_PROTOCOL) if to == 1 => "SET_PROTOCOL",
+            (true, 6) if to == 0 => "GET_DESCRIPTOR (hub)",
+            (true, HUB_GET_STATUS) if to == 0 || to == 3 => "GET_STATUS (hub)",
+            (true, HUB_SET_FEATURE) if to == 0 || to == 3 => "SET_FEATURE (hub)",
+            (true, HUB_CLEAR_FEATURE) if to == 0 || to == 3 => "CLEAR_FEATURE (hub)",
+            _ => return format!("request {:#04x} {:#04x} (value {:#06x}, index {})", self.kind, self.request, self.value, self.index),
+        };
+        format!("{name} (value {:#06x}, index {})", self.value, self.index)
+    }
 }
 
 const SET_CONFIGURATION: u8 = 9;
@@ -189,6 +228,27 @@ impl Error {
             Error::Bad(what) => what.to_string(),
         }
     }
+}
+
+/// Why a device couldn't be set up, and at which step ("when given its address").
+pub(super) struct Failed {
+    error: Error,
+    step: &'static str,
+}
+
+trait At<T> {
+    fn at(self, step: &'static str) -> Result<T, Failed>;
+}
+
+impl<T> At<T> for Result<T, Error> {
+    fn at(self, step: &'static str) -> Result<T, Failed> {
+        self.map_err(|error| Failed { error, step })
+    }
+}
+
+/// Seconds since `began` (time::now_us), for the log.
+fn since(began: u64) -> f64 {
+    time::now_us().saturating_sub(began) as f64 / 1e6
 }
 
 pub(super) fn dword(page: &Page, at: usize) -> u32 {
@@ -372,12 +432,21 @@ pub(super) fn command(hc: usize, issue: impl FnOnce(&mut xhci::Host) -> Option<u
     }) {
         Some((xhci::SUCCESS, slot)) => Ok(slot),
         Some((code, _)) => Err(Error::Code(code)),
-        None => Err(Error::NoAnswer),
+        None => {
+            let name = with(hc, |c| c.host.name.clone());
+            crate::log!("Chat Computer kernel: USB {name}: the controller didn't finish a command in 5 s");
+            Err(Error::NoAnswer)
+        }
     }
 }
 
 /// A request on endpoint 0, with `out` as its data if it sends any. Returns the data received.
 pub(super) fn control(hc: usize, slot: u8, r: Request, out: &[u8]) -> Result<Vec<u8>, Error> {
+    control_within(hc, slot, r, out, CONTROL_MS)
+}
+
+/// A request that may take `ms` milliseconds at most; one that isn't answered by then is said in the log.
+fn control_within(hc: usize, slot: u8, r: Request, out: &[u8], ms: u64) -> Result<Vec<u8>, Error> {
     let input = r.kind & 0x80 != 0;
     let len = (r.length as usize).min(CONTROL_MAX);
     let trbs = with(hc, |c| {
@@ -404,7 +473,7 @@ pub(super) fn control(hc: usize, slot: u8, r: Request, out: &[u8]) -> Result<Vec
         Some([a, b, s])
     })
     .ok_or(Error::Gone)?;
-    let outcome = wait(hc, 5000, |c| {
+    let outcome = wait(hc, ms, |c| {
         let Some(Some(d)) = c.devices.get(slot as usize) else { return Some(Err(Error::Gone)) };
         let mut residual = 0;
         for e in &d.events {
@@ -440,6 +509,7 @@ pub(super) fn control(hc: usize, slot: u8, r: Request, out: &[u8]) -> Result<Vec
         }
         None => {
             restart_endpoint(hc, slot, 1);
+            log_port(hc, &format!("slot {slot}"), &format!("{} got no answer in {:.1} s", r.describe(), ms as f64 / 1000.0));
             Err(Error::NoAnswer)
         }
     }
@@ -472,12 +542,12 @@ pub(super) fn descriptor(hc: usize, slot: u8, kind: u8, index: u8, language: u16
     control(hc, slot, Request::get_descriptor(kind, index, language, length), &[])
 }
 
-/// A string descriptor, as text.
+/// A string descriptor, as text (a name: not needed, so it isn't waited for long).
 pub(super) fn string(hc: usize, slot: u8, index: u8, language: u16) -> Option<String> {
     if index == 0 {
         return None;
     }
-    let d = descriptor(hc, slot, 3, index, language, 255).ok()?;
+    let d = control_within(hc, slot, Request::get_descriptor(3, index, language, 255), &[], OPTIONAL_MS).ok()?;
     let n = (*d.first()? as usize).min(d.len());
     if n < 4 {
         return None;
@@ -589,10 +659,14 @@ fn parse_configuration(d: &[u8]) -> Option<(u8, Vec<Interface>)> {
 
 /// Something changed on port `port` of the controller itself.
 pub fn root_port(hc: usize, port: u8) {
-    let (sc, usb3, existing) = with(hc, |c| {
+    let began = time::now_us();
+    let (sc, usb3, existing, plugged) = with(hc, |c| {
         let sc = c.host.port_acknowledge(port);
         let existing = c.devices.iter().flatten().find(|d| d.parent.is_none() && d.root_port == port).map(|d| d.slot);
-        (sc, c.host.protocol[port as usize] == 3, existing)
+        // When what's there was plugged in, as far as Chat Computer can tell: by the time the controller started, at
+        // the first look at the port; otherwise just now.
+        let plugged = if c.host.first_look(port) { c.host.started_us } else { began };
+        (sc, c.host.protocol[port as usize] == 3, existing, plugged)
     });
     let connected = sc & xhci::PORT_CONNECTED != 0;
     if let Some(slot) = existing {
@@ -604,30 +678,52 @@ pub fn root_port(hc: usize, port: u8) {
     if !connected {
         return;
     }
-    if usb3 {
-        // A USB 3 port trains its link and enables itself; one that doesn't gets a warm reset.
-        let enabled = wait(hc, 300, |c| (c.host.port_status(port) & xhci::PORT_ENABLED != 0).then_some(()));
-        if enabled.is_none() {
-            with(hc, |c| c.host.port_reset(port, true));
-            if wait(hc, 1000, |c| c.host.port_reset_done(port).then_some(())).is_none() {
-                return;
-            }
+    let place = Place { root_port: port, route: 0, parent: None, tt: (0, 0), depth: 0 };
+    for attempt in 0..TRIES {
+        if attempt > 0 && with(hc, |c| c.host.port_status(port) & xhci::PORT_CONNECTED == 0) {
+            return; // unplugged meanwhile
         }
-    } else {
-        sleep(hc, 100); // let the plug settle
-        with(hc, |c| c.host.port_reset(port, false));
-        if wait(hc, 1000, |c| c.host.port_reset_done(port).then_some(())).is_none() {
-            log_port(hc, &format!("port {port}"), "the port didn't finish resetting");
+        let reset = if usb3 {
+            // A USB 3 port trains its link and enables itself; one that doesn't (or one tried again) gets a warm reset.
+            (attempt == 0 && wait(hc, 300, |c| (c.host.port_status(port) & xhci::PORT_ENABLED != 0).then_some(())).is_some())
+                || reset_port(hc, port, true)
+        } else {
+            if attempt == 0 {
+                // A plug settles for 100 ms before its port is reset (USB 2.0's TATTDB), from when it went in.
+                let settled = plugged + 100_000;
+                let now = time::now_us();
+                if settled > now {
+                    sleep(hc, (settled - now).div_ceil(1000));
+                }
+            }
+            reset_port(hc, port, false)
+        };
+        if !reset {
+            log_port(hc, &place.describe(), "the port didn't finish resetting");
+            return;
+        }
+        let (sc, speed) = with(hc, |c| (c.host.port_status(port), c.host.port_speed(port)));
+        let (true, Some(speed)) = (sc & xhci::PORT_ENABLED != 0, speed) else {
+            log_port(hc, &place.describe(), "something is plugged in, but the port didn't come on");
+            return;
+        };
+        recover(hc, attempt);
+        if !attach(hc, place, speed, began, attempt + 1 == TRIES) {
             return;
         }
     }
-    let (sc, speed) = with(hc, |c| (c.host.port_status(port), c.host.port_speed(port)));
-    let (true, Some(speed)) = (sc & xhci::PORT_ENABLED != 0, speed) else {
-        log_port(hc, &format!("port {port}"), "something is plugged in, but the port didn't come on");
-        return;
-    };
-    sleep(hc, 10); // the device's recovery time after a reset
-    attach(hc, Place { root_port: port, route: 0, parent: None, tt: (0, 0), depth: 0 }, speed);
+}
+
+/// Resets a port of the controller itself (`warm`: a USB 3 port's warm reset). False if it didn't finish.
+fn reset_port(hc: usize, port: u8, warm: bool) -> bool {
+    with(hc, |c| c.host.port_reset(port, warm));
+    wait(hc, 1000, |c| c.host.port_reset_done(port).then_some(())).is_some()
+}
+
+/// The device's recovery time after its port's reset (USB 2.0's TRSTRCY: 10 ms), before it's spoken to; for a device
+/// being tried again, as long as Linux waits (50 ms).
+fn recover(hc: usize, attempt: usize) {
+    sleep(hc, if attempt == 0 { 10 } else { 50 });
 }
 
 fn log_port(hc: usize, place: &str, what: &str) {
@@ -635,19 +731,32 @@ fn log_port(hc: usize, place: &str, what: &str) {
     crate::log!("Chat Computer kernel: USB {name} {place}: {what}");
 }
 
-fn attach(hc: usize, place: Place, speed: Speed) {
-    if let Err(why) = enumerate(hc, place, speed) {
-        log_port(hc, &place.describe(), &format!("couldn't set up what is plugged in: {}", why.say()));
-    }
+/// Sets up what's plugged in at `place` (whose port was found to change at `began`). Returns whether to try again:
+/// it couldn't be set up, in a way another try may help (and `last` isn't set).
+fn attach(hc: usize, place: Place, speed: Speed, began: u64, last: bool) -> bool {
+    let Err(f) = enumerate(hc, place, speed, began) else { return false };
+    let again = !last && matches!(f.error, Error::Code(_) | Error::NoAnswer);
+    log_port(
+        hc,
+        &place.describe(),
+        &format!(
+            "couldn't set up what is plugged in: {} ({}; after {:.2} s){}",
+            f.error.say(),
+            f.step,
+            since(began),
+            if again { "; trying again" } else { "" }
+        ),
+    );
+    again
 }
 
 /// Gives a new device a slot and an address, finds out what it is, and sets it up.
-fn enumerate(hc: usize, place: Place, speed: Speed) -> Result<(), Error> {
-    let slot = command(hc, |h| h.enable_slot())?;
+fn enumerate(hc: usize, place: Place, speed: Speed, began: u64) -> Result<(), Failed> {
+    let slot = command(hc, |h| h.enable_slot()).at("when given a slot")?;
     let (context, low) = with(hc, |c| (c.host.context_size, c.host.low));
     let Some(device) = Device::new(slot, speed, place, low) else {
         let _ = command(hc, |h| h.disable_slot(slot));
-        return Err(Error::Bad("out of memory"));
+        return Err(Failed { error: Error::Bad("out of memory"), step: "when given a slot" });
     };
     let mps0: u16 = match speed {
         Speed::Low | Speed::Full => 8,
@@ -660,7 +769,7 @@ fn enumerate(hc: usize, place: Place, speed: Speed) -> Result<(), Error> {
         c.host.set_context(slot, Some(device.output.phys));
         c.devices[slot as usize] = Some(device);
     });
-    let result = set_up(hc, slot, place, speed, context, input);
+    let result = set_up(hc, slot, place, speed, context, input, began);
     if result.is_err() {
         let _ = command(hc, |h| h.disable_slot(slot));
         with(hc, |c| {
@@ -671,14 +780,15 @@ fn enumerate(hc: usize, place: Place, speed: Speed) -> Result<(), Error> {
     result
 }
 
-fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input: u64) -> Result<(), Error> {
-    command(hc, |h| h.address_device(slot, input))?;
+fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input: u64, began: u64) -> Result<(), Failed> {
+    command(hc, |h| h.address_device(slot, input)).at("when given its address")?;
     sleep(hc, 2);
     if speed == Speed::Full {
         // A full-speed device's first packets may be 8, 16, 32 or 64 bytes; its descriptor's first 8
         // bytes say which.
-        let d = descriptor(hc, slot, 1, 0, 0, 8)?;
-        let mps0 = *d.get(7).ok_or(Error::Bad("its device descriptor was too short"))? as u16;
+        const STEP: &str = "when asked how big its packets are";
+        let d = descriptor(hc, slot, 1, 0, 0, 8).at(STEP)?;
+        let mps0 = *d.get(7).ok_or(Error::Bad("its device descriptor was too short")).at(STEP)? as u16;
         if mps0 != 8 && matches!(mps0, 16 | 32 | 64) {
             let input = with(hc, |c| {
                 let d = c.devices[slot as usize].as_ref()?;
@@ -687,30 +797,37 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
                 d.ep0_context(context, mps0);
                 Some(d.input.phys)
             })
-            .ok_or(Error::Gone)?;
-            command(hc, |h| h.evaluate_context(slot, input))?;
+            .ok_or(Error::Gone)
+            .at(STEP)?;
+            command(hc, |h| h.evaluate_context(slot, input)).at(STEP)?;
         }
     }
-    let d = descriptor(hc, slot, 1, 0, 0, 18)?;
+    const WHAT: &str = "when asked what it is";
+    let d = descriptor(hc, slot, 1, 0, 0, 18).at(WHAT)?;
     if d.len() < 18 {
-        return Err(Error::Bad("its device descriptor was too short"));
+        return Err(Error::Bad("its device descriptor was too short")).at(WHAT);
     }
     let (class, vendor, product) = (d[4], u16::from_le_bytes([d[8], d[9]]), u16::from_le_bytes([d[10], d[11]]));
     let (maker_index, product_index, serial_index) = (d[14], d[15], d[16]);
-    let language = descriptor(hc, slot, 3, 0, 0, 4).ok().filter(|l| l.len() >= 4).map_or(0x0409, |l| u16::from_le_bytes([l[2], l[3]]));
+    let language = control_within(hc, slot, Request::get_descriptor(3, 0, 0, 4), &[], OPTIONAL_MS)
+        .ok()
+        .filter(|l| l.len() >= 4)
+        .map_or(0x0409, |l| u16::from_le_bytes([l[2], l[3]]));
     let name = string(hc, slot, product_index, language).or_else(|| string(hc, slot, maker_index, language));
     // Its configurations: the first, unless another is a network adapter's (adapters often offer a maker's own
     // way first and a standard one second; phones offer the standard ones only when sharing their connection).
     let count = d[17].clamp(1, 8);
     let mut chosen: Option<(u8, Vec<Interface>, Option<net::Kind>)> = None;
+    const CONFIGURATIONS: &str = "when asked how it can be set up";
     for index in 0..count {
-        let head = descriptor(hc, slot, 2, index, 0, 9)?;
+        let head = descriptor(hc, slot, 2, index, 0, 9).at(CONFIGURATIONS)?;
         if head.len() < 9 {
-            return Err(Error::Bad("its configuration descriptor was too short"));
+            return Err(Error::Bad("its configuration descriptor was too short")).at(CONFIGURATIONS);
         }
         let total = u16::from_le_bytes([head[2], head[3]]).max(9);
-        let config = descriptor(hc, slot, 2, index, 0, total)?;
-        let (value, interfaces) = parse_configuration(&config).ok_or(Error::Bad("its configuration descriptor didn't make sense"))?;
+        let config = descriptor(hc, slot, 2, index, 0, total).at(CONFIGURATIONS)?;
+        let (value, interfaces) =
+            parse_configuration(&config).ok_or(Error::Bad("its configuration descriptor didn't make sense")).at(CONFIGURATIONS)?;
         let kind = net::kind(&interfaces);
         let better = match (&chosen, kind) {
             (None, _) => true,
@@ -722,18 +839,20 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
             chosen = Some((value, interfaces, kind));
         }
     }
-    let Some((value, interfaces, net_kind)) = chosen else { return Err(Error::Bad("it has no configuration")) };
-    control(hc, slot, Request::to_class(0x00, SET_CONFIGURATION, value as u16, 0), &[])?;
+    let Some((value, interfaces, net_kind)) = chosen else {
+        return Err(Error::Bad("it has no configuration")).at(CONFIGURATIONS);
+    };
+    control(hc, slot, Request::to_class(0x00, SET_CONFIGURATION, value as u16, 0), &[]).at("when its configuration was chosen")?;
 
     let first: Vec<&Interface> = interfaces.iter().filter(|i| i.alt == 0).collect();
     let hid: Vec<&Interface> = first.iter().filter(|i| i.class == 3).copied().collect();
     let hub = first.iter().find(|i| i.class == 9).filter(|_| class == 9 || class == 0).copied();
     // What it is, for the log, and what to call it if it gives no name.
     let (what, plain_name): (String, Option<&str>) = if let Some(kind) = net_kind {
-        net::set_up(hc, slot, speed, kind, &interfaces)?;
+        net::set_up(hc, slot, speed, kind, &interfaces).at("when set up as a network adapter")?;
         (String::from(net::describe(kind)), Some("USB network adapter"))
     } else if let Some(plan) = audio::plan(&interfaces) {
-        let (what, a) = audio::set_up(hc, slot, speed, plan)?;
+        let (what, a) = audio::set_up(hc, slot, speed, plan).at("when set up as a sound card")?;
         crate::log!("Chat Computer kernel: USB {}: sound card in slot {slot}: {}", place.describe(), a.describe());
         with(hc, |c| {
             if let Some(Some(d)) = c.devices.get_mut(slot as usize) {
@@ -745,15 +864,15 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
         if matches!(speed, Speed::Super | Speed::SuperPlus) {
             (String::from("a USB 3 hub (keyboards and mice behind it show up on its USB 2 side)"), Some("USB hub"))
         } else {
-            set_up_hub(hc, slot, place, speed, i)?;
+            set_up_hub(hc, slot, place, speed, i).at("when set up as a hub")?;
             (String::from("a hub"), Some("USB hub"))
         }
-    } else if let Some((what, plain_name)) = set_up_inputs(hc, slot, speed, &hid)? {
+    } else if let Some((what, plain_name)) = set_up_inputs(hc, slot, speed, &hid).at("when set up as a keyboard or mouse")? {
         (what, Some(plain_name))
     } else if storage::interface(&interfaces).is_some() {
         // (Its serial number: Windows names a USB stick by it.)
         let serial = string(hc, slot, serial_index, language);
-        (storage::set_up(hc, slot, speed, &interfaces, serial)?, Some("USB drive"))
+        (storage::set_up(hc, slot, speed, &interfaces, serial).at("when set up as a drive")?, Some("USB drive"))
     } else {
         (String::from("a device Chat Computer doesn't use yet"), None)
     };
@@ -761,7 +880,7 @@ fn set_up(hc: usize, slot: u8, place: Place, speed: Speed, context: usize, input
     log_port(
         hc,
         &place.describe(),
-        &format!("{what}, \"{name}\" ({vendor:04x}:{product:04x}, {}), in slot {slot}", speed.name()),
+        &format!("{what}, \"{name}\" ({vendor:04x}:{product:04x}, {}), in slot {slot} ({:.2} s)", speed.name(), since(began)),
     );
     let used = with(hc, |c| match c.devices.get_mut(slot as usize) {
         Some(Some(d)) => {
@@ -910,7 +1029,7 @@ fn set_up_inputs(hc: usize, slot: u8, speed: Speed, interfaces: &[&Interface]) -
         let Some(ep) = interface.endpoints.iter().find(|e| e.interrupt_in()).copied() else { continue };
         let number = interface.number as u16;
         // A report only when something changes (a keyboard's and a mouse's usual way; one that refuses is fine).
-        let _ = control(hc, slot, Request::to_class(0x21, HID_SET_IDLE, 0, number), &[]);
+        let _ = control_within(hc, slot, Request::to_class(0x21, HID_SET_IDLE, 0, number), &[], OPTIONAL_MS);
         let descriptor = report_descriptor(hc, slot, interface);
         // A test build can be told to read keyboards in the boot protocol (check.py --keyboard tries both).
         let keys = if option_env!("CHATCOMPUTER_TEST_USB_KEYBOARD") == Some("boot") {
@@ -923,7 +1042,7 @@ fn set_up_inputs(hc: usize, slot: u8, speed: Speed, interfaces: &[&Interface]) -
             // The report protocol, which a device starts in (the firmware may have asked for the boot protocol
             // before Chat Computer took over: only boot interfaces take a protocol).
             if interface.subclass == 1 {
-                let _ = control(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 1, number), &[]);
+                let _ = control_within(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 1, number), &[], OPTIONAL_MS);
             }
             log_port(hc, &format!("slot {slot}"), &format!("its interface {} is a keyboard: {}", interface.number, describe_keys(&layout)));
             let pointer = descriptor.as_deref().and_then(hid::parse);
@@ -979,7 +1098,7 @@ fn set_up_inputs(hc: usize, slot: u8, speed: Speed, interfaces: &[&Interface]) -
 fn report_descriptor(hc: usize, slot: u8, interface: &Interface) -> Option<Vec<u8>> {
     let length = interface.report_length.unwrap_or(1024).clamp(1, CONTROL_MAX as u16);
     let r = Request { kind: 0x81, request: 6, value: 0x22 << 8, index: interface.number as u16, length };
-    control(hc, slot, r, &[]).ok().filter(|d| !d.is_empty())
+    control_within(hc, slot, r, &[], REPORT_MS).ok().filter(|d| !d.is_empty())
 }
 
 /// "6 keys at once, in report 1", for the log.
@@ -1000,10 +1119,10 @@ fn describe_keys(k: &hid::Keys) -> String {
 /// which is fine.
 fn keyboard_protocol(hc: usize, slot: u8, number: u8) {
     let number = number as u16;
-    if let Err(e) = control(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 0, number), &[]) {
+    if let Err(e) = control_within(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 0, number), &[], OPTIONAL_MS) {
         log_port(hc, &format!("slot {slot}"), &format!("the keyboard refused the boot protocol ({}); using it anyway", e.say()));
     }
-    let _ = control(hc, slot, Request::to_class(0x21, HID_SET_IDLE, 0, number), &[]);
+    let _ = control_within(hc, slot, Request::to_class(0x21, HID_SET_IDLE, 0, number), &[], OPTIONAL_MS);
 }
 
 /// Where a HID interface's buttons, movement and wheel are, if it is a mouse: from its report descriptor, in the
@@ -1019,7 +1138,7 @@ fn mouse_layout(hc: usize, slot: u8, interface: &Interface, descriptor: Option<&
     match layout {
         Some(layout) => {
             if boot {
-                let _ = control(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 1, number), &[]);
+                let _ = control_within(hc, slot, Request::to_class(0x21, HID_SET_PROTOCOL, 1, number), &[], OPTIONAL_MS);
             }
             Some(layout)
         }
@@ -1043,13 +1162,13 @@ fn describe_mouse(layout: &hid::Pointer) -> String {
 
 pub fn set_lights(hc: usize, slot: u8, interface: u8, lights: u8) {
     let r = Request { kind: 0x21, request: HID_SET_REPORT, value: 0x0200, index: interface as u16, length: 1 };
-    let _ = control(hc, slot, r, &[lights]); // a keyboard without lights may refuse
+    let _ = control_within(hc, slot, r, &[lights], OPTIONAL_MS); // a keyboard without lights may refuse
 }
 
 /// A keyboard's lights, by the output report its descriptor says sets them (`id`: its report ID, 0 for none).
 pub fn set_lights_report(hc: usize, slot: u8, interface: u8, id: u8, data: &[u8]) {
     let r = Request { kind: 0x21, request: HID_SET_REPORT, value: 0x0200 | id as u16, index: interface as u16, length: data.len() as u16 };
-    let _ = control(hc, slot, r, data);
+    let _ = control_within(hc, slot, r, data, OPTIONAL_MS);
 }
 
 fn set_up_hub(hc: usize, slot: u8, place: Place, speed: Speed, interface: &Interface) -> Result<(), Error> {
@@ -1075,7 +1194,7 @@ fn set_up_hub(hc: usize, slot: u8, place: Place, speed: Speed, interface: &Inter
             let size = (ep.max_packet & 0x7FF).clamp(1, 4);
             // Every port is looked at once, then whenever the hub reports a change.
             let all = ((1u32 << (ports + 1)) - 1) & !1;
-            d.role = Role::Hub(Hub { ports, dci, size, changes: all });
+            d.role = Role::Hub(Hub { ports, dci, size, changes: all, powered_us: time::now_us(), fresh: all });
             d.queue_interrupt(db, dci);
         }
     });
@@ -1118,6 +1237,7 @@ fn hub_port_status(hc: usize, hub: u8, port: u8) -> Result<(u16, u16), Error> {
 }
 
 fn hub_port(hc: usize, hub: u8, port: u8) {
+    let began = time::now_us();
     let Ok((status, change)) = hub_port_status(hc, hub, port) else { return };
     for bit in 0..5 {
         if change & (1 << bit) != 0 {
@@ -1135,44 +1255,67 @@ fn hub_port(hc: usize, hub: u8, port: u8) {
     if !connected {
         return;
     }
-    sleep(hc, 100); // let the plug settle
-    if control(hc, hub, Request::to_class(0x23, HUB_SET_FEATURE, PORT_RESET, port as u16), &[]).is_err() {
-        return;
+    let place = with(hc, |c| {
+        let h = c.devices.get_mut(hub as usize)?.as_mut()?;
+        // When what's there was plugged in, as far as Chat Computer can tell: by the time the hub's ports had power,
+        // at the first look at the port; otherwise just now.
+        let plugged = match &mut h.role {
+            Role::Hub(hub) if hub.fresh & 1 << port != 0 => {
+                hub.fresh &= !(1 << port);
+                hub.powered_us
+            }
+            _ => began,
+        };
+        Some((h.root_port, h.route, h.depth, h.speed, h.tt, plugged))
+    });
+    let Some((root_port, route, depth, hub_speed, hub_tt, plugged)) = place else { return };
+    let mut place = Place { root_port, route: route | (port.min(15) as u32) << (4 * depth), parent: Some((hub, port)), tt: (0, 0), depth: depth + 1 };
+    // A plug settles for 100 ms before its port is reset (USB 2.0's TATTDB), from when it went in.
+    let settled = plugged + 100_000;
+    let now = time::now_us();
+    if settled > now {
+        sleep(hc, (settled - now).div_ceil(1000));
     }
-    let mut status = 0;
-    let mut done = false;
+    for attempt in 0..TRIES {
+        let status = reset_hub_port(hc, hub, port);
+        if status.is_some_and(|s| s & 1 == 0) {
+            return; // unplugged meanwhile
+        }
+        let Some(status) = status.filter(|s| s & 2 != 0) else {
+            log_port(hc, &place.describe(), "something is plugged in, but the hub's port didn't come on");
+            return;
+        };
+        let speed = if status & (1 << 9) != 0 {
+            Speed::Low
+        } else if status & (1 << 10) != 0 {
+            Speed::High
+        } else {
+            Speed::Full
+        };
+        if matches!(speed, Speed::Low | Speed::Full) {
+            place.tt = if hub_speed == Speed::High { (hub, port) } else { hub_tt };
+        }
+        recover(hc, attempt);
+        if !attach(hc, place, speed, began, attempt + 1 == TRIES) {
+            return;
+        }
+    }
+}
+
+/// Resets a hub's port. Returns the port's status once it's done (None if the hub didn't, in half a second).
+fn reset_hub_port(hc: usize, hub: u8, port: u8) -> Option<u16> {
+    control(hc, hub, Request::to_class(0x23, HUB_SET_FEATURE, PORT_RESET, port as u16), &[]).ok()?;
+    let mut done = None;
     for _ in 0..50 {
         sleep(hc, 10);
-        let Ok((s, c)) = hub_port_status(hc, hub, port) else { return };
+        let (s, c) = hub_port_status(hc, hub, port).ok()?;
         if c & (1 << 4) != 0 {
-            status = s;
-            done = true;
+            done = Some(s);
             break;
         }
     }
     let _ = control(hc, hub, Request::to_class(0x23, HUB_CLEAR_FEATURE, C_PORT_RESET, port as u16), &[]);
-    let place = with(hc, |c| {
-        let h = c.devices.get(hub as usize)?.as_ref()?;
-        Some((h.root_port, h.route, h.depth, h.speed, h.tt))
-    });
-    let Some((root_port, route, depth, hub_speed, hub_tt)) = place else { return };
-    let mut place = Place { root_port, route: route | (port.min(15) as u32) << (4 * depth), parent: Some((hub, port)), tt: (0, 0), depth: depth + 1 };
-    if !done || status & 2 == 0 {
-        log_port(hc, &place.describe(), "something is plugged in, but the hub's port didn't come on");
-        return;
-    }
-    let speed = if status & (1 << 9) != 0 {
-        Speed::Low
-    } else if status & (1 << 10) != 0 {
-        Speed::High
-    } else {
-        Speed::Full
-    };
-    if matches!(speed, Speed::Low | Speed::Full) {
-        place.tt = if hub_speed == Speed::High { (hub, port) } else { hub_tt };
-    }
-    sleep(hc, 10);
-    attach(hc, place, speed);
+    done
 }
 
 /// A device went away: so does everything behind it, then its slot.

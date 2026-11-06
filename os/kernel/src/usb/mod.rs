@@ -15,6 +15,7 @@ mod xhci;
 
 use crate::sync::SpinLock;
 use crate::{cpu, idt, keyboard, pci, time};
+use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -105,6 +106,7 @@ pub fn take_over() -> usize {
 
 /// Once interrupts are on: starts the controllers, then finds what is plugged in.
 pub fn start() {
+    let began = time::now_us();
     idt::set_device_handler(idt::USB_VECTOR, interrupt);
     {
         let mut controllers = CONTROLLERS.lock();
@@ -129,6 +131,17 @@ pub fn start() {
     }
     work();
     changed();
+    let (devices, controllers) = {
+        let controllers = CONTROLLERS.lock();
+        (controllers.iter().map(|c| c.devices.iter().flatten().count()).sum::<usize>(), controllers.len())
+    };
+    if controllers > 0 {
+        crate::log!(
+            "Chat Computer kernel: USB: {devices} device{} set up, in {:.2} s",
+            if devices == 1 { "" } else { "s" },
+            time::now_us().saturating_sub(began) as f64 / 1e6
+        );
+    }
 }
 
 /// The controllers' interrupt.
@@ -176,54 +189,71 @@ fn handle_events(c: &mut Controller) {
     }
 }
 
+/// What a look at a controller found to do.
+enum Job {
+    /// One of the controller's own ports changed.
+    Port(u8),
+    /// A hub's ports changed (in slot, bit n: port n; bit 0: the hub itself).
+    Hub(u8, u32),
+    /// An endpoint stopped after an error (in slot, its device context index).
+    Restart(u8, u8),
+}
+
 /// In the kernel's main loop: devices plugged in or out, hubs' changes, keyboards' lights, media put in drives or
 /// taken out.
 pub fn work() {
     let count = CONTROLLERS.lock().len();
-    for hc in 0..count {
-        // A hub found on one pass has its ports looked at on the next, so a few passes find everything.
-        for _ in 0..8 {
-            if !pass(hc) {
-                break;
+    // A hub found on one pass has its ports looked at on the next, so a few passes find everything. The controllers
+    // take turns, a job at a time, so that a keyboard on one isn't kept waiting while all that's on another is set up.
+    for _ in 0..8 {
+        let mut jobs: Vec<VecDeque<Job>> = (0..count).map(jobs).collect();
+        if jobs.iter().all(|j| j.is_empty()) {
+            break;
+        }
+        while jobs.iter().any(|j| !j.is_empty()) {
+            for (hc, queue) in jobs.iter_mut().enumerate() {
+                match queue.pop_front() {
+                    Some(Job::Port(port)) => device::root_port(hc, port),
+                    Some(Job::Hub(slot, changes)) => device::hub_changes(hc, slot, changes),
+                    Some(Job::Restart(slot, dci)) => device::restart_endpoint(hc, slot, dci),
+                    None => {}
+                }
             }
         }
+    }
+    for hc in 0..count {
+        lights(hc);
         storage::poll(hc);
     }
 }
 
-/// One look at controller `hc`. Returns whether anything needed doing.
-fn pass(hc: usize) -> bool {
-    let (ports, hubs, broken) = with(hc, |c| {
+/// What controller `hc` has to do: its events handled, then its ports and its hubs' that changed, and its endpoints
+/// that stopped.
+fn jobs(hc: usize) -> VecDeque<Job> {
+    with(hc, |c| {
         handle_events(c);
+        let mut jobs = VecDeque::new();
         if !c.host.running {
-            return (Vec::new(), Vec::new(), Vec::new());
+            return jobs;
         }
-        let hubs: Vec<(u8, u32)> = c
-            .devices
-            .iter_mut()
-            .flatten()
-            .filter_map(|d| match &mut d.role {
-                Role::Hub(h) if h.changes != 0 => Some((d.slot, core::mem::take(&mut h.changes))),
-                _ => None,
-            })
-            .collect();
-        let mut broken: Vec<(u8, u8)> = Vec::new();
+        jobs.extend(c.host.take_port_changes().into_iter().map(Job::Port));
+        for d in c.devices.iter_mut().flatten() {
+            if let Role::Hub(h) = &mut d.role
+                && h.changes != 0
+            {
+                jobs.push_back(Job::Hub(d.slot, core::mem::take(&mut h.changes)));
+            }
+        }
         for d in c.devices.iter_mut().flatten() {
             let stopped = core::mem::take(&mut d.stopped);
-            broken.extend((1..32u8).filter(|dci| stopped & 1 << dci != 0).map(|dci| (d.slot, dci)));
+            jobs.extend((1..32u8).filter(|dci| stopped & 1 << dci != 0).map(|dci| Job::Restart(d.slot, dci)));
         }
-        (c.host.take_port_changes(), hubs, broken)
-    });
-    let busy = !ports.is_empty() || !hubs.is_empty() || !broken.is_empty();
-    for port in ports {
-        device::root_port(hc, port);
-    }
-    for (slot, changes) in hubs {
-        device::hub_changes(hc, slot, changes);
-    }
-    for (slot, dci) in broken {
-        device::restart_endpoint(hc, slot, dci);
-    }
+        jobs
+    })
+}
+
+/// Keyboards' lights, set when they changed (Caps Lock), and what keyboards did, said in the log.
+fn lights(hc: usize) {
     let lights = keyboard::lights();
     let (keyboards, said) = with(hc, |c| {
         let mut out = Vec::new();
@@ -272,7 +302,6 @@ fn pass(hc: usize) -> bool {
             crate::log!("Chat Computer kernel: USB {name} {line}");
         }
     }
-    busy
 }
 
 /// Runs `f` on controller `hc`, with the controllers locked (and interrupts off).

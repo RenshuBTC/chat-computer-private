@@ -265,6 +265,8 @@ struct Machine {
     /// The tables, by signature (LoadTable), and how many lines of the firmware's Debug output have been logged.
     tables: Vec<([u8; 4], u64)>,
     said: u32,
+    /// How long its programs have waited (Sleep and Stall), in microseconds: for the log.
+    waited_us: u64,
 }
 
 impl Machine {
@@ -510,10 +512,12 @@ impl Host for Machine {
     }
 
     fn sleep(&mut self, ms: u64) {
+        self.waited_us = self.waited_us.saturating_add(ms.saturating_mul(1000));
         time::delay_ms(ms);
     }
 
     fn stall(&mut self, us: u64) {
+        self.waited_us = self.waited_us.saturating_add(us);
         time::delay_us(us);
     }
 
@@ -1173,6 +1177,7 @@ pub fn init(acpi: &Acpi, off: bool) -> String {
     let Some(dsdt) = table_bytes(acpi.dsdt) else {
         return String::from("firmware: no DSDT, so no programs to run");
     };
+    let began = time::now_us();
     let events = acpi.events.unwrap_or_default();
     let mode = if events.hardware_reduced { "a hardware-reduced PC" } else { acpi_mode(&events) };
     // The global lock, in the FACS (checked to be one).
@@ -1192,6 +1197,7 @@ pub fn init(acpi: &Acpi, off: bool) -> String {
         pm1_control: (events.pm1a_control, events.pm1b_control),
         tables: acpi.tables.clone(),
         said: 0,
+        waited_us: 0,
     };
     let mut aml = Aml::new();
     aml.limits(MOST_STEPS, MOST_SLEEP_US);
@@ -1202,6 +1208,7 @@ pub fn init(acpi: &Acpi, off: bool) -> String {
             Err(e) => crate::log!("Chat Computer kernel: firmware: a table didn't load: {e:?}"),
         }
     }
+    let load_us = time::now_us().saturating_sub(began);
     // The embedded controller first (its _REG: the firmware's methods may use it from then on), then CMOS's space, then
     // the _INIs (and PCI configuration space's _REG, as ACPICA does it).
     machine.ec = find_ec(&mut aml, &mut machine);
@@ -1349,6 +1356,14 @@ pub fn init(acpi: &Acpi, off: bool) -> String {
     for line in fw.status_lines() {
         summary += &format!("; {}", line.to_lowercase());
     }
+    // How long this took, and how much of it was the firmware's own programs waiting (or its tables being read).
+    let seconds = |us: u64| us as f64 / 1e6;
+    summary += &format!(
+        "; in {:.2} s ({:.2} s of it its programs' own waits, {:.2} s reading its tables)",
+        seconds(time::now_us().saturating_sub(began)),
+        seconds(fw.machine.waited_us),
+        seconds(load_us)
+    );
     FIRMWARE.set(fw);
     summary
 }

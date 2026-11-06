@@ -7,6 +7,8 @@
 //! microsecond time that work even while interrupts are off, and when it runs at one speed whatever the processor
 //! does (an "invariant" one, as processors of the last 15 years or so have), it counts the time since start-up too:
 //! ticks are lost while interrupts are off (as they are while a lock is held), and the time-stamp counter loses none.
+//! Without one (a virtual PC may not say its counter is invariant), each tick reads the power-management timer, which
+//! counts on whatever happens, so the ticks lost meanwhile are counted all the same.
 
 use crate::acpi::{Acpi, PmTimer};
 use crate::apic;
@@ -45,14 +47,37 @@ static UPTIME_TSC_PER_MS: AtomicU64 = AtomicU64::new(0);
 static UPTIME_TSC_START: AtomicU64 = AtomicU64::new(0);
 /// The time-stamp counter when the timer started (uptime 0).
 static STARTED_TSC: AtomicU64 = AtomicU64::new(0);
+/// When the power-management timer counts the uptime (the time-stamp counter can't): its port, with bit 16 set if
+/// it's 32 bits wide (0: it doesn't); its count at the last tick; and its counts since the timer started.
+static UPTIME_PM: AtomicU64 = AtomicU64::new(0);
+static UPTIME_PM_LAST: AtomicU64 = AtomicU64::new(0);
+static UPTIME_PM_COUNTS: AtomicU64 = AtomicU64::new(0);
 
+/// The timer's interrupt (on the first core only: the others' timers stay off).
 pub fn tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
+    let pm = UPTIME_PM.load(Ordering::Relaxed);
+    if pm != 0 {
+        let now = read_pm(pm);
+        let last = UPTIME_PM_LAST.swap(now, Ordering::Relaxed);
+        UPTIME_PM_COUNTS.fetch_add(now.wrapping_sub(last) & pm_mask(pm), Ordering::Relaxed);
+    }
+}
+
+/// The power-management timer's count (`pm`: as UPTIME_PM holds it).
+fn read_pm(pm: u64) -> u64 {
+    unsafe { inl(pm as u16) as u64 & pm_mask(pm) }
+}
+
+/// Its counts wrap at 24 bits, or at 32 (every 4.7 seconds, or 20 minutes).
+fn pm_mask(pm: u64) -> u64 {
+    if pm & 1 << 16 != 0 { 0xFFFF_FFFF } else { 0xFF_FFFF }
 }
 
 /// Time since the timer started, in milliseconds.
 pub fn uptime_ms() -> u64 {
     match UPTIME_TSC_PER_MS.load(Ordering::Relaxed) {
+        0 if UPTIME_PM.load(Ordering::Relaxed) != 0 => UPTIME_PM_COUNTS.load(Ordering::Relaxed) * 1000 / PM_TIMER_HZ,
         0 => TICKS.load(Ordering::Relaxed) * 1000 / HZ,
         per_ms => rdtsc().wrapping_sub(UPTIME_TSC_START.load(Ordering::Relaxed)) / per_ms,
     }
@@ -65,7 +90,13 @@ fn invariant_tsc() -> bool {
 
 /// What counts the time since start-up.
 pub fn uptime_by() -> &'static str {
-    if UPTIME_TSC_PER_MS.load(Ordering::Relaxed) != 0 { "the time-stamp counter" } else { "the timer's ticks" }
+    if UPTIME_TSC_PER_MS.load(Ordering::Relaxed) != 0 {
+        "the time-stamp counter"
+    } else if UPTIME_PM.load(Ordering::Relaxed) != 0 {
+        "the power-management timer, read each tick"
+    } else {
+        "the timer's ticks"
+    }
 }
 
 fn tsc_per_us() -> u64 {
@@ -227,13 +258,22 @@ pub fn init(acpi: &Acpi) -> (u64, &'static str) {
         found = measure(|| wait_pit(MEASURE_MS)).map(|s| (s, "measured against the PIT"));
     }
     let (per_second, how) = found.unwrap_or_else(unmeasured);
+    let tsc_per_ms = MEASURED_TSC_PER_MS.load(Ordering::Relaxed);
+    let by_tsc = tsc_per_ms != 0 && invariant_tsc();
+    // (The power-management timer only if it was seen to count: the APIC timer was measured against it.)
+    let pm = match acpi.pm_timer {
+        Some(t) if !by_tsc && how.ends_with("power-management timer") => t.port as u64 | (t.wide as u64) << 16,
+        _ => 0,
+    };
     apic::write(apic::LVT_TIMER, TIMER_VECTOR as u32 | 1 << 17); // periodic
     apic::write(apic::TIMER_INITIAL, (per_second / HZ) as u32);
     STARTED_TSC.store(rdtsc(), Ordering::Relaxed);
-    let tsc_per_ms = MEASURED_TSC_PER_MS.load(Ordering::Relaxed);
-    if tsc_per_ms != 0 && invariant_tsc() {
+    if by_tsc {
         UPTIME_TSC_START.store(rdtsc(), Ordering::Relaxed);
         UPTIME_TSC_PER_MS.store(tsc_per_ms, Ordering::Relaxed);
+    } else if pm != 0 {
+        UPTIME_PM_LAST.store(read_pm(pm), Ordering::Relaxed);
+        UPTIME_PM.store(pm, Ordering::Relaxed);
     }
     (per_second, how)
 }

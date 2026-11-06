@@ -534,6 +534,17 @@ def keyboard_run(label: str, controller: str, args, plug: bool, boot_mice: bool 
             problems.append(f"{label}: the tablet wasn't found as {tablet!r}")
         if "port 6.3: a device Chat Computer doesn't use yet" not in text:
             problems.append(f"{label}: the smart card reader wasn't found and left alone")
+        # Everything set up at the start, none of it waited on until a request's time ran out (the plugs' settling
+        # waited for once, not for each): a device that never answers would show here as seconds.
+        import re
+        took = re.search(r"USB: 6 devices set up, in ([0-9.]+) s", text)
+        if not took:
+            problems.append(f"{label}: the log doesn't say the 6 devices were set up, and how long that took")
+        elif float(took.group(1)) > 4:
+            problems.append(f"{label}: setting up the 6 devices took {took.group(1)} s")
+        for words in ("got no answer", "didn't finish a command", "trying again"):
+            if words in text:
+                problems.append(f"{label}: the log says {words!r}")
         time.sleep(1)
         before = pc.picture(f"{name}-1")
         monitor_many(pc.mon, [f"sendkey {k}" for k in KEYS])

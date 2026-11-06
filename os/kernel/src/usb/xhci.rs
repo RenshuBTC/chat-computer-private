@@ -329,6 +329,10 @@ pub struct Host {
     pub command_done: Option<(u64, u8, u8)>,
     /// Ports with changes to look at, one bit per port number.
     port_changes: [u64; 4],
+    /// When it started (time::now_us), and the ports not looked at since: what was plugged in by then has been since
+    /// before, so one wait for the plugs to settle does for all of it.
+    pub started_us: u64,
+    fresh: [u64; 4],
 }
 
 /// Intel's 7, 8 and 9 series chipsets (2012-2015) have an older controller next to the xHCI one, and the
@@ -411,6 +415,8 @@ impl Host {
             events: None,
             command_done: None,
             port_changes: [0; 4],
+            started_us: 0,
+            fresh: [0; 4],
         };
         host.extended_capabilities(cparams1);
         // Stop it, then reset it.
@@ -541,7 +547,17 @@ impl Host {
         for port in 1..=self.ports {
             self.mark_port(port);
         }
+        self.fresh = self.port_changes;
+        self.started_us = time::now_us();
         Ok(())
+    }
+
+    /// Whether this is the first look at `port` since the controller started (and it isn't, from now on).
+    pub fn first_look(&mut self, port: u8) -> bool {
+        let (word, bit) = (port as usize / 64, 1u64 << (port % 64));
+        let first = self.fresh[word] & bit != 0;
+        self.fresh[word] &= !bit;
+        first
     }
 
     /// Whether the controller stopped itself because something went badly wrong.

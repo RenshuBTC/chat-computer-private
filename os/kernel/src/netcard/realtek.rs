@@ -29,6 +29,9 @@ use core::sync::atomic::{fence, Ordering};
 
 pub const VENDOR: u16 = 0x10EC;
 
+/// The chips (by the version the transmit configuration register gives) Chat Computer has connected with on a real
+/// PC: the RTL8125B of the first PC it started on (a desktop, 6 November 2026: its address from DHCP).
+const TRIED: &[u16] = &[0x641];
 /// PCI ids of the family (the chip itself is told by its XID).
 const DEVICES: &[u16] = &[
     0x8168, // RTL8111/8168/8411
@@ -708,10 +711,14 @@ impl Realtek {
         } else {
             card.w16(IMR_8168, INT_MASK as u16);
         }
-        crate::log!(
-            "Chat Computer kernel: network: the {name} (version {xid:#05x}) hasn't been tried on a real PC yet{notes}; \
-             if it doesn't connect, that's why"
-        );
+        if TRIED.contains(&xid) {
+            crate::log!("Chat Computer kernel: network: the {name} (version {xid:#05x}): it has worked on a real PC{notes}");
+        } else {
+            crate::log!(
+                "Chat Computer kernel: network: the {name} (version {xid:#05x}) hasn't been tried on a real PC yet{notes}; \
+                 if it doesn't connect, that's why"
+            );
+        }
         Ok(card)
     }
 

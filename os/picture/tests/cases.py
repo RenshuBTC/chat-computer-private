@@ -7,8 +7,11 @@ JPEGs are written and decoded by Pillow (libjpeg-turbo): every kind of subsampli
 markers, odd sizes, every quality from 5 to 100, optimized Huffman tables, Adobe CMYK, EXIF's eight orientations, and
 pictures decoded smaller than they are. PNGs by Pillow, and by a writer here for what Pillow doesn't write (every
 depth of every colour type, 16 bits, transparency, Adam7 interlacing, each filter), whose pixels are worked out here.
-GIFs by Pillow, interlaced or not, with a transparent colour. And pictures for the crate's JPEG writer, with
-Pillow's JPEG of each, which it must write the same.
+GIFs by Pillow, interlaced or not, with a transparent colour. WebPs by Pillow (libwebp), and decoded by it, which
+the crate must match exactly: lossy at qualities from 5 to 100, with alpha (compressed and filtered as libwebp does
+by default, and quantized), lossless with each of its transforms and palettes of 2 to 200 colours, odd sizes, an
+animation's first frame. And pictures for the crate's JPEG writer, with Pillow's JPEG of each, which it must write
+the same.
 
     python3 tests/cases.py <folder>
 """
@@ -304,6 +307,41 @@ def gif_cases(c: Cases) -> None:
     c.add("gif-four-colours", "gif", out.getvalue(), Image.open(io.BytesIO(out.getvalue())).convert("RGB"))
 
 
+def webp_cases(c: Cases) -> None:
+    def webp(im: Image.Image, **options) -> bytes:
+        out = io.BytesIO()
+        im.save(out, "WEBP", **options)
+        return out.getvalue()
+
+    def add(name: str, data: bytes, **options) -> None:
+        c.add(name, "webp", data, on_background(Image.open(io.BytesIO(data))), **options)
+
+    big = photo(160, 120, 40)
+    odd = photo(33, 17, 41)
+    see_through = photo(65, 43, 42).convert("RGBA")
+    see_through.putalpha(Image.radial_gradient("L").resize((65, 43)).point(lambda v: 255 - v))
+    for q in (5, 40, 80, 100):
+        add(f"webp-lossy-q{q}", webp(big, quality=q))
+    add("webp-lossy-odd", webp(odd, quality=70))
+    add("webp-lossy-1x1", webp(photo(1, 1, 43), quality=70))
+    add("webp-lossy-alpha", webp(see_through, quality=75))
+    add("webp-lossy-alpha-quantized", webp(see_through, quality=75, alpha_quality=30))
+    for m in (0, 6):
+        add(f"webp-lossless-m{m}", webp(big, lossless=True, method=m))
+    add("webp-lossless-odd", webp(odd, lossless=True))
+    add("webp-lossless-17x1", webp(photo(17, 1, 44), lossless=True))
+    add("webp-lossless-alpha", webp(see_through, lossless=True, exact=True))
+    for n in (2, 4, 16, 200):
+        add(f"webp-lossless-palette{n}", webp(big.quantize(colors=n).convert("RGB"), lossless=True))
+    frames = [photo(30, 20, 50 + k) for k in range(3)]
+    out = io.BytesIO()
+    frames[0].save(out, "WEBP", save_all=True, append_images=frames[1:], duration=80, quality=60)
+    add("webp-animation", out.getvalue())
+    shrunk = webp(big, quality=90)
+    c.add("webp-shrunk", "webp", shrunk, on_background(Image.open(io.BytesIO(shrunk))).resize((80, 60), Image.Resampling.BOX),
+          box=(80, 70), psnr=45.0)
+
+
 def encoder_cases(folder: Path) -> None:
     """Pictures for the crate's JPEG writer, and Pillow's JPEG of each (4:2:0, its standard tables, as Pillow saves by
     default): encode.txt lists each one's name, width, height and quality. Sizes of every kind: whole MCUs, a block
@@ -336,5 +374,6 @@ if __name__ == "__main__":
     jpeg_cases(cases)
     png_cases(cases)
     gif_cases(cases)
+    webp_cases(cases)
     cases.save()
     encoder_cases(folder)

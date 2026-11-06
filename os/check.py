@@ -2700,7 +2700,7 @@ def files_check(args) -> list[str]:
                     r"Chat Computer's own system can't open yet\.",
             "wide": rf"C:\\Users\\Sam\\Pictures\\Panorama\.png \(\d+ KB, 9000×40 pixels, changed {day}\): the picture "
                     r"is here \(as you see it, 8992×32 pixels\)\.",
-            "nopic": r"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx isn't a picture this screen shows \(JPEG, PNG or GIF\)\.",
+            "nopic": r"C:\\Users\\Sam\\Documents\\Work\\Talk\.pptx isn't a picture this screen shows \(JPEG, PNG, GIF, WebP or SVG\)\.",
             "showpic": r"Shown on the screen: C:\\Users\\Sam\\Pictures\\Beach\.jpg \(10 KB, 640×480 pixels\)\.",
         }
         for q, pattern in want.items():

@@ -1,5 +1,6 @@
 //! Pictures, read: JPEG (baseline and progressive, as cameras, phones and the web make them), PNG (every colour type
-//! and depth, interlaced or not), GIF (its first frame) and SVG (drawn: svg.rs), as RGB pixels on a background (where
+//! and depth, interlaced or not), GIF (its first frame), WebP (lossy and lossless, with alpha; an animation's first
+//! frame: webp.rs) and SVG (drawn: svg.rs), as RGB pixels on a background (where
 //! they're transparent; or with their alpha, `decode_alpha`, to be drawn over what's behind them), made to fit a box: shrunk by averaging (never enlarged), and a photo turned the way its camera says
 //! (its EXIF orientation). A big JPEG is decoded at a half, a quarter or an eighth of its size when that's still
 //! enough for the box, which takes a fraction of the memory and time. Decoding keeps to the memory it's given.
@@ -17,6 +18,10 @@ extern crate alloc;
 mod gif;
 mod jpeg;
 mod png;
+mod vp8;
+mod vp8l;
+mod webp;
+mod webp_tables;
 mod encode;
 pub mod draw;
 pub mod svg;
@@ -40,7 +45,7 @@ pub struct Picture {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
-    /// Not a JPEG, PNG or GIF.
+    /// Not a JPEG, PNG, GIF, WebP or SVG.
     NotAPicture,
     /// Something in it doesn't add up.
     Damaged,
@@ -55,6 +60,7 @@ pub enum Format {
     Jpeg,
     Png,
     Gif,
+    Webp,
     /// Drawn (svg.rs) rather than decoded: at twice its own size, if that fits the box (sharper on a screen of more
     /// than one pixel to a CSS pixel).
     Svg,
@@ -68,6 +74,8 @@ pub fn format(data: &[u8]) -> Option<Format> {
         Some(Format::Png)
     } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
         Some(Format::Gif)
+    } else if webp::is_webp(data) {
+        Some(Format::Webp)
     } else if svg::is_svg(data) {
         Some(Format::Svg)
     } else {
@@ -79,12 +87,14 @@ pub fn format(data: &[u8]) -> Option<Format> {
 const MOST_PIXELS: u64 = 40 << 20;
 
 /// The most bytes a pixel decoded can take while it's decoded, by format: a JPEG's three planes and the result; a PNG's
-/// rows as stored (up to 8 bytes a pixel, at 16 bits with transparency) and the result; a GIF's indexes and the result.
+/// rows as stored (up to 8 bytes a pixel, at 16 bits with transparency) and the result; a GIF's indexes and the result;
+/// a WebP's pixels as decoded (lossless: 4 bytes, twice when a palette's undone; lossy: its planes) and the result.
 fn per_pixel(f: Format) -> u64 {
     match f {
         Format::Jpeg => 8,
         Format::Png => 12,
         Format::Gif => 5,
+        Format::Webp => 12,
         Format::Svg => 24,
     }
 }
@@ -136,6 +146,11 @@ fn decode_planes(data: &[u8], width: u32, height: u32, memory: u64, upright: boo
         }
         Format::Gif => {
             let (p, a) = gif::decode(data, most)?;
+            let full = (p.width, p.height);
+            (p, a, full)
+        }
+        Format::Webp => {
+            let (p, a) = webp::decode(data, most)?;
             let full = (p.width, p.height);
             (p, a, full)
         }
@@ -328,6 +343,7 @@ pub fn size(data: &[u8]) -> Option<(u32, u32)> {
     match format(data)? {
         Format::Png => png::size(data),
         Format::Gif => gif::size(data),
+        Format::Webp => webp::size(data),
         Format::Jpeg => jpeg::size(data),
         Format::Svg => svg::size(data),
     }

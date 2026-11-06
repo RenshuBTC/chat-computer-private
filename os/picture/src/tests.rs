@@ -1,6 +1,6 @@
-//! Against pictures written by Pillow (libjpeg-turbo, zlib) and by a PNG writer of the tests' own, and the pixels
-//! each should come out as (tests/cases.py makes them all, in a folder of its own for each run): JPEGs as libjpeg
-//! decodes them (a sample at most 1 off), PNGs and GIFs exactly, pictures decoded smaller near enough to the whole
+//! Against pictures written by Pillow (libjpeg-turbo, zlib, libwebp) and by a PNG writer of the tests' own, and the
+//! pixels each should come out as (tests/cases.py makes them all, in a folder of its own for each run): JPEGs as
+//! libjpeg decodes them (a sample at most 1 off), PNGs, GIFs and WebPs exactly, pictures decoded smaller near enough to the whole
 //! averaged down. Damaged pictures give errors, never a crash, and pictures that would need more memory than given are
 //! too big. JPEGs written here are byte for byte what Pillow (libjpeg-turbo) writes.
 
@@ -105,6 +105,16 @@ fn says_what_it_cant_read() {
     assert_eq!(size(&c.data), Some((320, 240)));
     let p = all().into_iter().find(|c| c.name == "png-pillow-rgb").unwrap();
     assert_eq!(size(&p.data), Some((45, 31)));
+}
+
+#[test]
+fn webp_sizes_from_headers() {
+    // Lossy, lossless, extended (with alpha) and animated: each one's size from its first chunk.
+    for (name, w, h) in [("webp-lossy-odd", 33, 17), ("webp-lossless-17x1", 17, 1), ("webp-lossy-alpha", 65, 43), ("webp-animation", 30, 20)] {
+        let c = all().into_iter().find(|c| c.name == name).unwrap();
+        assert_eq!(format(&c.data), Some(Format::Webp), "{name}");
+        assert_eq!(size(&c.data), Some((w, h)), "{name}");
+    }
 }
 
 #[test]

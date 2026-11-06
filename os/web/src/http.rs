@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 pub const ACCEPT_PAGE: &str = "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5";
 /// A style sheet, and a picture (in the forms Chat Computer reads).
 pub const ACCEPT_CSS: &str = "text/css,*/*;q=0.1";
-pub const ACCEPT_PICTURE: &str = "image/png,image/jpeg,image/gif;q=0.9,*/*;q=0.1";
+pub const ACCEPT_PICTURE: &str = "image/webp,image/png,image/jpeg,image/svg+xml,image/gif;q=0.9,*/*;q=0.1";
 /// A page's script, and what a page's scripts fetch (anything).
 pub const ACCEPT_SCRIPT: &str = "*/*";
 

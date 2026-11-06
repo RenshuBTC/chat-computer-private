@@ -20,7 +20,7 @@
 //!
 //! read_file reads text as it is; Word, Excel and PowerPoint files (and OpenDocument's) as their words (office/); a
 //! PDF as its words, page by page (pdf/: the last one read kept, to read on in parts); and a ZIP archive as the list
-//! of what's in it. A picture (JPEG, PNG, GIF) is given to the model to see, made the size its vision part reads it
+//! of what's in it. A picture (JPEG, PNG, GIF, WebP) is given to the model to see, made the size its vision part reads it
 //! at (picture/'s decode_for), as is a PDF's page whose words are pictures (a scanned page: pdf/'s page_picture);
 //! show_picture puts a picture on the screen for the person.
 
@@ -1230,7 +1230,7 @@ pub struct Got {
 pub type Sight<'a> = &'a dyn Fn(usize, usize) -> (usize, usize);
 
 /// A file (read_file), from byte `from`: text as it is (UTF-8, or UTF-16 as Notepad saves it); an Office file's or a
-/// PDF's words (`from` counts in them); a ZIP archive's list. A picture (JPEG, PNG or GIF) is given to the model to see
+/// PDF's words (`from` counts in them); a ZIP archive's list. A picture (JPEG, PNG, GIF or WebP) is given to the model to see
 /// if it can (`sight`), as is a PDF's page whose words are pictures (a scanned one: `page`, from 1); else, as a file
 /// of another kind, it's said to be one (and why the model can't see it: `blind`).
 pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>, blind: &str) -> Result<Got, String> {
@@ -1255,9 +1255,6 @@ pub fn read(path: &str, from: u64, page: Option<u64>, sight: Option<Sight>, blin
                          to the person."
                     ));
                 };
-                if media == "image/webp" {
-                    return said(format!("{about} is a WebP picture, which Chat Computer's own system can't open yet."));
-                }
                 if f.size > MOST_SHOWN {
                     return said(format!("{about} is a picture too big for Chat Computer's own system to open."));
                 }
@@ -1480,10 +1477,8 @@ pub fn view(path: &str) -> Result<View, String> {
         let n = fs.read(p, &f, 0, &mut head).map_err(fail)?;
         let ext = rel.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         Ok(match kind_of(&head[..n], &rel) {
-            Kind::Picture(media) => {
-                if media == "image/webp" {
-                    note(String::from("It's a WebP picture, which Chat Computer's own system can't open yet."))
-                } else if f.size > MOST_SHOWN {
+            Kind::Picture(_) => {
+                if f.size > MOST_SHOWN {
                     note(String::from("It's a picture too big for Chat Computer's own system to open."))
                 } else {
                     let data = whole(fs, p, &f, MOST_SHOWN).map_err(fail)?;
@@ -1610,9 +1605,8 @@ pub fn picture(path: &str, w: u32, h: u32, ground: u32) -> Result<(String, pictu
                 Ok((format!("Shown on the screen: {name} ({}{full}).", size(f.size)), pic))
             }
             Err(picture::Error::NotAPicture) => Err(match kind_of(&data[..data.len().min(32)], &rel) {
-                Kind::Picture("image/webp") => format!("{name} is a WebP picture, which this screen can't show yet (read_file shows it to you)."),
                 Kind::Media(what) => format!("{name} is {what}, which Chat Computer's own system can't show yet."),
-                _ => format!("{name} isn't a picture this screen shows (JPEG, PNG or GIF)."),
+                _ => format!("{name} isn't a picture this screen shows (JPEG, PNG, GIF, WebP or SVG)."),
             }),
             Err(picture::Error::Unsupported(what)) => Err(format!("{name} is a {what}, which Chat Computer's own system can't show yet.")),
             Err(picture::Error::TooBig) => Err(format!("{name} has too many pixels to show here.")),

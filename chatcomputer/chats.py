@@ -15,8 +15,14 @@ MOST = 200               # chats kept in the list
 TITLE_CHARS = 48
 
 
+_last_id = 0
+
+
 def new_id() -> str:
-    return "c" + format(int(time.time() * 1000), "x")
+    """The time in milliseconds, in hex: one past the last made, if two come in the same millisecond."""
+    global _last_id
+    _last_id = max(int(time.time() * 1000), _last_id + 1)
+    return "c" + format(_last_id, "x")
 
 
 class Chats:

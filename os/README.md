@@ -281,7 +281,7 @@ drivers.
       only an owner's password, limiting printing or copying). A page with no words (a scanned one) is given to the
       model to see, as one picture of its pictures where they are on the page (`page` says which; the first, if the
       PDF has no words at all). The last PDF read is kept, so its next parts don't read it again. A ZIP archive's
-      files are listed. A picture (JPEG, PNG or GIF) is given to the model to see: decoded at about twice the size
+      files are listed. A picture (JPEG, PNG, GIF or WebP) is given to the model to see: decoded at about twice the size
       the model sees it at (a big JPEG at a fraction of its size), turned as its camera says, then resized as Qwen's
       processor resizes it (Pillow's bicubic resampling, `picture/`), at most 1,024 of its rows (about a million
       pixels: a photo of 1,152 by 864, a page of 832 by 1,216). The model looks at it a step at a time, each step as
@@ -300,7 +300,7 @@ drivers.
       each search's words and each site read, in grey where it happens in the answer: those are what leave the PC.
       Without a network (Wi-Fi isn't supported yet), the model's told what would work: a cable, a USB network
       adapter, or an Android phone's USB tethering;
-    * `show_picture`: a photo, a screenshot or a drawing on one of Windows' drives (JPEG, PNG or GIF), shown to the
+    * `show_picture`: a photo, a screenshot or a drawing on one of Windows' drives (JPEG, PNG, GIF or WebP), shown to the
       person in the conversation where the model's answer is, as wide as the column at most (and two thirds of its
       height), its corners rounded, turned the way the camera says (`picture/`). The last 12 shown keep their pixels;
     * `restart_computer`: a restart a few seconds after the model's answer, which goes back to Windows, or (asked
@@ -403,7 +403,7 @@ drivers.
   and Courier New (`fonts/build_web.py`), so its words take the room and its lines the height they take in Chrome, or
   in the page's own fonts (@font-face: TrueType, WOFF and WOFF2, fetched as the page needs them and chosen by family,
   weight and style as CSS says, with a bold or italic made up as Chrome makes one where the page has none); its
-  pictures JPEG, PNG, GIF or SVG, an <svg> in the page drawn as a picture too, see-through where they are) and laid
+  pictures JPEG, PNG, GIF, WebP or SVG, an <svg> in the page drawn as a picture too, see-through where they are) and laid
   out (checked against Chromium drawing the same files, element by element: rem as the root's font size, a flex
   line's height given to what stretches across it, fields as Chrome sizes them): blocks with their margins collapsing, lines of words wrapping round floats,
   flex, grid (its tracks sized by CSS Grid's own algorithm, named areas and auto-placement), tables, positioned boxes,
@@ -592,14 +592,19 @@ drivers.
 * `picture/` decodes pictures for the screen: JPEG (baseline and progressive, any sampling, restart markers,
   Adobe's CMYK, EXIF's orientation) as libjpeg decodes it (its accurate integer inverse DCT, its "fancy" upsampling,
   its YCbCr arithmetic), a big one at a half, a quarter or an eighth of its size when that's enough, so a phone's
-  48-megapixel photo needs a few megabytes; PNG (every colour type and depth, transparency, interlacing); and GIF's
-  first frame. Shrunk to fit by averaging, in integers only, and in the memory it's given (the kernel gives half its
+  48-megapixel photo needs a few megabytes; PNG (every colour type and depth, transparency, interlacing); GIF's
+  first frame; and WebP (`webp.rs`): lossy (a VP8 key frame, `vp8.rs`: its bool decoder, intra prediction, inverse
+  DCT and WHT, loop filters, and libwebp's "fancy" upsampling to RGB, as Chrome shows it), lossless (VP8L, `vp8l.rs`:
+  its prefix codes and meta codes, backward references, colour cache, and its four transforms), with alpha (raw or
+  lossless, filtered), extended, and an animation's first frame. Shrunk to fit by averaging, in integers only, and in the memory it's given (the kernel gives half its
   heap's biggest free piece: a bigger picture is said to be too big). And resampled as Pillow does it (bicubic, with
   antialiasing), as Qwen's processor resizes a picture for its model to see. It writes JPEGs too: baseline, 4:2:0, the standard's tables, exactly as libjpeg writes them (its colour arithmetic, its
   rounding as it halves the colour, its edges and dummy blocks, its accurate integer DCT). Tested against Pillow's
   (libjpeg-turbo's) decoding of pictures it wrote (within one level a sample) and PNGs written by its test, every
-  depth and colour type (exactly), damaged pictures, and Pillow's JPEGs of the same pixels, which the writer's must
-  match byte for byte, at every size and quality tried.
+  depth and colour type (exactly), WebPs written by libwebp (through Pillow) and decoded by it, lossy at every
+  quality, lossless with each transform and palette size, with alpha and animated (exactly), damaged pictures, and
+  Pillow's JPEGs of the same pixels, which the writer's must match byte for byte, at every size and quality tried.
+  VP8's and VP8L's tables are libwebp's (see `picture/README.md`).
 * `chime/` makes the chimes of timers and reminders: bell notes, each a tone with its second and third harmonics,
   rising in 5 ms and dying away, the same as the main Chat Computer's (`chatcomputer/voice/chime.py`), at any
   sample rate. Made with sine recurrences (each sample from the two before), as the kernel's floating point is
@@ -976,10 +981,10 @@ writes for each person, in place of Ubuntu's catalogue.
     custom properties worked out as CSS says (cycles, inherit, initial), web fonts (@font-face, WOFF and WOFF2), a
     compositor (backgrounds' pictures and gradients, stacking contexts, transforms, opacity, masks, clip-path,
     filters, backdrop-filter, blending, rounded clipping, fixed and sticky boxes), text-overflow and line clamps,
-    animations' resting states. Measured by the Web Platform Tests every browser runs (each test and its reference
+    animations' resting states, WebP pictures (lossy and lossless, decoded exactly as libwebp decodes them).
+    Measured by the Web Platform Tests every browser runs (each test and its reference
     drawn by Chat Computer and compared; the scripted tests run in it): to do there is what they and comparing sites
-    with Chrome turn up, first animations as they run (each frame's values between keyframes), WebP pictures,
-    iframes, writing modes, border-image, and SVG backgrounds of no size of their own. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
+    with Chrome turn up, first animations as they run (each frame's values between keyframes), iframes, writing modes, border-image, and SVG backgrounds of no size of their own. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
     plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time
     zone. To do: touchpads.

@@ -2,7 +2,8 @@
 //! WIDTH]` reads the page as Chat Computer's own system does, runs its scripts (and its timers, for N ms of the
 //! page's time: 2000 if not said), and prints what its scripts printed; with --html, the page as its scripts left it.
 //! Its style sheets, pictures and scripts, and what its scripts fetch, are read from FILES (a folder) by their
-//! address's path (or as files.txt there names them), when it's given. With --ppm it's drawn WIDTH CSS pixels wide.
+//! address's path (or as files.txt there names them), when it's given. With --ppm it's drawn WIDTH CSS pixels wide (and
+//! its window is that wide for its scripts too; 1280 if not said), 900 tall.
 
 use browser::page::{Kind, Page, State};
 use browser::paint::{Painter, Shown, Surface};
@@ -52,9 +53,9 @@ fn run() {
                 continue;
             }
             match a.as_str() {
-                "--ms" | "--why" => skip = 1,
+                "--ms" | "--why" | "--eval" | "--before" => skip = 1,
                 "--ppm" => skip = 2,
-                "--html" | "--items" => {}
+                "--html" | "--items" | "--boxes" => {}
                 _ => out.push(a),
             }
         }
@@ -81,7 +82,14 @@ fn run() {
     let text = web::page::decode(&html, "text/html");
     let started = std::time::Instant::now();
     let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
-    let mut page = Page::with_scripts(Url::parse(address).expect("an address"), &text, epoch, (1280.0, 800.0, 1.0), 0x1234_5678);
+    // (The window's size: as wide as the picture asked for, if one is.)
+    let width: f32 = flag("--ppm").and_then(|i| args.get(i + 2)).and_then(|v| v.parse().ok()).unwrap_or(1280.0);
+    let height = 900.0;
+    let mut page = Page::with_scripts(Url::parse(address).expect("an address"), &text, epoch, (width, height, 1.0), 0x1234_5678);
+    // (A script of the tool's own, run before the page's: to watch what they do.)
+    if let Some(i) = flag("--before") {
+        page.run_text(&args[i + 1]);
+    }
     let mut pictures = Pictures(Vec::new());
     let ty = Type::builtin();
     let mut now = 0.0;
@@ -100,7 +108,7 @@ fn run() {
         }
         page.run(now);
         if !laid_once && page.sheets_done() {
-            page.lay_out(&ty, 1280.0, 800.0, 1.0);
+            page.lay_out(&ty, width, height, 1.0);
             laid_once = true;
         }
         page.animation_frame(now);
@@ -118,13 +126,13 @@ fn run() {
         }
         now = step;
         if page.changed {
-            page.lay_out(&ty, 1280.0, 800.0, 1.0);
+            page.lay_out(&ty, width, height, 1.0);
         }
     }
     eprintln!("({:.0} ms, {} ms of the page's time; its scripts {} deep)", started.elapsed().as_secs_f64() * 1000.0, now as u64, page.script_depth());
     if flag("--items").is_some() {
         // What's drawn, item by item (text and rectangles): where, and in what colour.
-        let laid = page.lay_out(&ty, 1280.0, 800.0, 1.0);
+        let laid = page.lay_out(&ty, width, height, 1.0);
         println!("(laid out: {} items, {} px tall, background {:?})", laid.items.len(), laid.height, laid.background);
         for it in laid.items.iter().take(400) {
             match &it.paint {
@@ -138,7 +146,7 @@ fn run() {
     if let Some(i) = flag("--why") {
         // Where some words are drawn from: each element they're in, outwards, with its box.
         let want = args[i + 1].clone();
-        let laid = page.lay_out(&ty, 1280.0, 800.0, 1.0);
+        let laid = page.lay_out(&ty, width, height, 1.0);
         let found = laid.items.iter().find(|it| matches!(&it.paint, browser::layout::Paint::Text { text, .. } if text.contains(want.as_str()))).map(|it| it.node);
         let boxes = laid.boxes.clone();
         if let Some(node) = found {
@@ -154,16 +162,37 @@ fn run() {
             }
         }
     }
+    if let Some(i) = flag("--eval") {
+        // A script's value once the page has run (as Chromium's would be asked for): logged.
+        page.run_text(&format!("try {{ console.log('eval: ' + String({})); }} catch (e) {{ console.log('eval threw: ' + e); }}", args[i + 1]));
+        for line in page.take_console() {
+            println!("{line}");
+        }
+    }
+    if flag("--boxes").is_some() {
+        // Every element with an id: its border box (CSS pixels), as chrome_boxes.py prints Chromium's, to compare.
+        let laid = page.lay_out(&ty, width, height, 1.0);
+        let boxes = laid.boxes.clone();
+        let d = &page.doc;
+        for n in 0..d.nodes.len() {
+            let Some(e) = d.element(n) else { continue };
+            let Some(id) = e.attr("id").filter(|i| !i.is_empty()) else { continue };
+            let r = boxes.iter().find(|(b, _)| *b == n).map(|(_, r)| *r);
+            match r {
+                Some(r) => println!("{}#{}: x {:.1} y {:.1} w {:.1} h {:.1}", e.name, id, r.x, r.y, r.w, r.h),
+                None => println!("{}#{}: x 0.0 y 0.0 w 0.0 h 0.0", e.name, id),
+            }
+        }
+    }
     if flag("--html").is_some() {
         println!("{}", page.doc.outer_html(0));
     }
     if let Some(i) = flag("--ppm") {
         let out = &args[i + 1];
-        let width: f32 = args[i + 2].parse().expect("a width");
-        // (Laid out at this width, and what that asks for fetched: an <svg>'s picture made in its colours.)
-        page.lay_out(&ty, width, 900.0, 1.0);
+        // (Laid out again, and what that asks for fetched: an <svg>'s picture made in its colours.)
+        page.lay_out(&ty, width, height, 1.0);
         fetch(&mut page, &mut pictures, &files, &index);
-        let laid = page.lay_out(&ty, width, 900.0, 1.0);
+        let laid = page.lay_out(&ty, width, height, 1.0);
         let w = width as usize;
         let h = (laid.height.ceil() as usize).clamp(1, 6000);
         let mut pixels = vec![0u32; w * h];

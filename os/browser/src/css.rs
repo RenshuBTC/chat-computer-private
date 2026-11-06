@@ -934,6 +934,8 @@ pub enum Pseudo {
     Required,
     Optional,
     PlaceholderShown,
+    /// :popover-open: a popover showing.
+    PopoverOpen,
     /// :host, :host(S): a shadow tree's host (from the tree's own style sheets).
     Host(Vec<Selector>),
     /// ::slotted(S): an element the host has that its shadow tree shows in a slot.
@@ -1167,6 +1169,7 @@ fn simple(t: &[Tok], c: &mut Compound, spec: &mut (u32, u32, u32), pe: &mut Opti
                         "required" => Pseudo::Required,
                         "optional" => Pseudo::Optional,
                         "placeholder-shown" => Pseudo::PlaceholderShown,
+                        "popover-open" => Pseudo::PopoverOpen,
                         "host" => Pseudo::Host(Vec::new()),
                         // Old pseudo-elements written with one colon.
                         "before" | "after" => {

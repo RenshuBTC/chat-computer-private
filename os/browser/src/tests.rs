@@ -309,7 +309,8 @@ fn the_bodys_overflow_is_the_pages_so_a_body_of_no_height_doesnt_hide_it() {
 #[test]
 fn custom_elements_in_an_import_or_a_clone_are_upgraded_before_it_comes_back() {
     // (Polymer stamps its templates with importNode, then sets the properties of the custom elements in the copy:
-    // YouTube's dom-if needed its constructor run by then. In a template's own contents, nothing is upgraded.)
+    // YouTube's dom-if needed its constructor run by then. In a template's own contents, nothing is upgraded. What
+    // innerHTML makes is upgraded before it returns, as Chrome does, in the page or not.)
     let mut p = scripted(
         "<body><template id=t><div><x-box></x-box></div></template><script>\
          class XBox extends HTMLElement { constructor() { super(); this.made = true; } get v() { return this.made ? 'ok' : 'none'; } }\
@@ -322,7 +323,44 @@ fn custom_elements_in_an_import_or_a_clone_are_upgraded_before_it_comes_back() {
          console.log(a instanceof XBox, a.v, b instanceof XBox, b.made, d instanceof XBox, d.v, f instanceof XBox, f.made);</script></body>",
     );
     p.run(0.0);
-    assert_eq!(p.take_console(), ["true ok false undefined true ok false undefined"]);
+    assert_eq!(p.take_console(), ["true ok false undefined true ok true true"]);
+}
+
+#[test]
+fn a_custom_element_is_constructed_once() {
+    // (Made by createElement or its own constructor, it isn't constructed again when it's put in the page: YouTube's
+    // page manager hid its watch page before attaching it, and a second construction forgot that.)
+    let mut p = scripted(
+        "<body><script>var made = 0;\
+         class XEl extends HTMLElement { constructor() { super(); made++; } connectedCallback() { console.log('connected', made); } }\
+         customElements.define('x-el', XEl);\
+         var a = document.createElement('x-el'); a.hidden = true; document.body.appendChild(a);\
+         var b = new XEl(); document.body.appendChild(b);\
+         console.log(made, a.hidden);</script></body>",
+    );
+    p.run(0.0);
+    assert_eq!(p.take_console(), ["connected 1", "connected 2", "2 true"]);
+}
+
+#[test]
+fn a_popover_shows_only_once_shown() {
+    let mut p = scripted(
+        "<body style='margin:0'><div id=a popover style='width:50px;height:20px'>tip</div><p>text</p><script>\
+         var a = document.getElementById('a'); a.addEventListener('toggle', function (e) { console.log(e.newState); });\
+         </script></body>",
+    );
+    p.run(0.0);
+    let ty = Type::builtin();
+    let a = p.doc.descendants(0).find(|&n| p.doc.element(n).is_some_and(|e| e.attr("id") == Some("a"))).unwrap();
+    let laid = p.lay_out(&ty, 400.0, 300.0, 1.0);
+    assert!(laid.boxes.iter().all(|(n, _)| *n != a), "a popover isn't shown until a script shows it");
+    p.run_text("a.showPopover(); console.log(a.matches(':popover-open'));");
+    let laid = p.lay_out(&ty, 400.0, 300.0, 1.0);
+    let r = laid.boxes.iter().find(|(n, _)| *n == a).map(|(_, r)| *r).expect("shown");
+    // (In the middle of the window, over the page.)
+    assert!((r.x + r.w / 2.0 - 200.0).abs() < 2.0 && (r.y + r.h / 2.0 - 150.0).abs() < 2.0, "{r:?}");
+    p.run_text("a.togglePopover();");
+    assert_eq!(p.take_console(), ["open", "true", "closed"]);
 }
 
 #[test]
@@ -492,10 +530,16 @@ fn a_family_list_gets_the_kind_of_font_it_asks_for() {
             })
             .unwrap()
     };
-    use text::Face;
+    use text::{Face, Family};
     assert_eq!(
         [face("sans"), face("serif"), face("default"), face("webfont"), face("code")],
-        [Face::Sans, Face::Bold, Face::Regular, Face::SansBold, Face::Mono]
+        [
+            Face::Web(Family::Sans, false, false),
+            Face::Web(Family::Serif, true, false),
+            Face::Web(Family::Serif, false, false),
+            Face::Web(Family::Sans, true, false),
+            Face::Web(Family::Mono, false, false)
+        ]
     );
 }
 
@@ -661,7 +705,7 @@ fn dashed_dotted_and_double_borders_are_drawn_as_their_pieces() {
             _ => None,
         })
         .collect();
-    assert!(dots.len() > 10 && dots.iter().all(|d| *d == (3.0, 3.0, 1.5)), "{dots:?}");
+    assert!(dots.len() > 10 && dots.iter().all(|d| *d == (3.0, 3.0, [1.5; 4])), "{dots:?}");
     // The double line's top: two lines 2 pixels thick, 2 apart.
     let lines: Vec<_> = rects(l, GREEN).into_iter().filter(|r| r.2 == 100.0).collect();
     assert!(lines.iter().any(|r| r.1 == 100.0 && r.3 == 2.0) && lines.iter().any(|r| r.1 == 104.0 && r.3 == 2.0), "{lines:?}");
@@ -695,4 +739,171 @@ fn tab_goes_through_links_buttons_and_fields_shown() {
     let b = p.box_of(first.unwrap()).unwrap();
     assert!(b.w > 10.0 && b.h > 5.0, "{b:?}");
     assert!(p.is_text_field(p.next_focusable(first, false).unwrap()));
+}
+
+/// The border box (CSS pixels) of the element with id `id`, as the page is laid out `w` wide.
+fn box_of(p: &mut Page, id: &str, w: f32) -> crate::layout::Rect {
+    let ty = Type::builtin();
+    let n = p.doc.descendants(0).find(|&n| p.doc.element(n).is_some_and(|e| e.attr("id") == Some(id))).expect("the element");
+    let laid = p.lay_out(&ty, w, 600.0, 1.0);
+    laid.boxes.iter().find(|(b, _)| *b == n).map(|(_, r)| *r).expect("its box")
+}
+
+#[test]
+fn rem_is_the_root_elements_font_size() {
+    // (YouTube's, and many sites': html { font-size: 62.5% }, so 1.6rem is 16px, not 25.6.)
+    let mut p = page("<html style='font-size:62.5%'><body style='margin:0'><div id=a style='width:10rem;height:2.4rem'></div></body></html>");
+    let r = box_of(&mut p, "a", 800.0);
+    assert_eq!((r.w, r.h), (100.0, 24.0));
+}
+
+#[test]
+fn a_stretched_flex_item_is_as_high_as_its_line_before_its_insides_are_laid_out() {
+    // (A row 40px high: what stretches is 40 high, and a child 100% high of it is too, as in Chrome; YouTube's
+    // search box.)
+    let mut p = page(
+        "<body style='margin:0'><div style='display:flex;height:40px;width:600px'><div id=w style='width:100%'>\
+         <div id=c style='display:flex;height:100%'><div id=tall style='height:60px;width:10px'></div></div></div></div></body>",
+    );
+    assert_eq!(box_of(&mut p, "w", 800.0).h, 40.0);
+    assert_eq!(box_of(&mut p, "c", 800.0).h, 40.0);
+}
+
+#[test]
+fn fields_are_sized_as_chrome_sizes_them() {
+    // A text field a line of its line height high however wide it's made (no shape to keep, as a picture has), 20
+    // characters wide by default; a button's box-sizing border-box; Chrome's numbers.
+    let mut p = page(
+        "<body style='margin:0'><input id=a style='width:100%;font-size:16px;line-height:22px;padding:1px 0;border:0'>\
+         <br><input id=b><br><button id=c style='width:64px'>Go</button><br><textarea id=d></textarea></body>",
+    );
+    let a = box_of(&mut p, "a", 600.0);
+    assert_eq!((a.w, a.h), (600.0, 24.0));
+    let b = box_of(&mut p, "b", 600.0);
+    assert!((b.w - 185.0).abs() < 2.0 && b.h == 21.0, "{b:?}");
+    assert_eq!(box_of(&mut p, "c", 600.0).w, 64.0);
+    let d = box_of(&mut p, "d", 600.0);
+    assert!((d.w - 182.0).abs() < 2.0 && d.h == 36.0, "{d:?}");
+}
+
+#[test]
+fn normal_line_height_is_the_fonts_own_as_chrome_works_it_out() {
+    // (Times New Roman's metric twin at 16px: 18px lines; Arial's 18 too, at 13.333px 15; monospace's medium is
+    // 13px, 15px lines, unless it's "monospace, monospace".)
+    let mut p = page(
+        "<body style='margin:0'><div id=a>serif</div><div id=b style='font-family:Arial'>sans</div>\
+         <div id=c style='font-family:Arial;font-size:13.333px'>small</div><pre id=d style='margin:0'>code</pre>\
+         <div id=e style='font-family:monospace, monospace'>code</div></body>",
+    );
+    assert_eq!(box_of(&mut p, "a", 600.0).h, 18.0);
+    assert_eq!(box_of(&mut p, "b", 600.0).h, 18.0);
+    assert_eq!(box_of(&mut p, "c", 600.0).h, 15.0);
+    assert_eq!(box_of(&mut p, "d", 600.0).h, 15.0);
+    assert_eq!(box_of(&mut p, "e", 600.0).h, 18.0);
+}
+
+#[test]
+fn a_flex_or_grid_item_keeps_its_childrens_margins_inside_it() {
+    // (A flex or grid item's insides are a formatting context of their own: a child's margins don't collapse through
+    // it, as YouTube's feed has them, its nudge's 36px under it.)
+    let mut p = page(
+        "<body style='margin:0'><div id=f style='display:flex;flex-wrap:wrap'><div id=item>\
+         <div id=inner style='height:100px;margin:10px 0 36px'></div></div></div>\
+         <div id=g style='display:grid'><div><div style='height:50px;margin:20px 0 30px'></div></div></div>\
+         <div id=plain><div style='height:50px;margin:20px 0 30px'></div></div></body>",
+    );
+    assert_eq!(box_of(&mut p, "item", 600.0).h, 146.0);
+    assert_eq!(box_of(&mut p, "inner", 600.0).y, 10.0);
+    assert_eq!(box_of(&mut p, "f", 600.0).h, 146.0);
+    assert_eq!(box_of(&mut p, "g", 600.0).h, 100.0);
+    // (A plain block's child's margins still collapse through it.)
+    let plain = box_of(&mut p, "plain", 600.0);
+    assert_eq!((plain.y, plain.h), (266.0, 50.0));
+}
+
+#[test]
+fn each_corner_rounded_its_own_and_scaled_down_to_fit() {
+    // (Four values: top left, top right, bottom right, bottom left; a longhand for one corner; and radii too big for
+    // their sides all scaled down by the same factor, as CSS says: 40 + 40 on a side of 50 is 25 + 25.)
+    let mut p = page(
+        "<body style='margin:0'><div style='width:100px;height:50px;background:red;border-radius:1px 2px 3px 4px;border-top-right-radius:5px'></div>\
+         <div style='width:100px;height:50px;background:blue;border-radius:40px'></div></body>",
+    );
+    let l = laid(&mut p);
+    let radius_of = |color: u32| {
+        l.items.iter().find_map(|i| match &i.paint {
+            Paint::Rect { color: c, radius, .. } if *c == color => Some(*radius),
+            _ => None,
+        })
+    };
+    assert_eq!(radius_of(RED), Some([1.0, 5.0, 3.0, 4.0]));
+    assert_eq!(radius_of(BLUE), Some([25.0; 4]));
+}
+
+#[test]
+fn a_box_shadow_is_drawn_under_its_box() {
+    let mut p = page(
+        "<body style='margin:0'><div style='margin:20px;width:100px;height:50px;background:red;border-radius:12px;\
+         box-shadow:0 4px 32px 2px rgba(0, 0, 0, 0.1), 0 1px 2px blue'></div></body>",
+    );
+    let l = laid(&mut p);
+    let shadow = l.items.iter().position(|i| matches!(i.paint, Paint::Shadow { .. })).expect("a shadow");
+    let background = l.items.iter().position(|i| matches!(i.paint, Paint::Rect { color: RED, .. })).expect("the background");
+    assert!(shadow < background, "the shadow first, the box over it");
+    let Paint::Shadow { x, y, w, h, radius, dx, dy, blur, spread, color } = l.items[shadow].paint else { unreachable!() };
+    assert_eq!((x, y, w, h, radius), (20.0, 20.0, 100.0, 50.0, [12.0; 4]));
+    assert_eq!((dx, dy, blur, spread), (0.0, 4.0, 32.0, 2.0));
+    assert_eq!(color >> 24, 26, "its colour's alpha, 0.1");
+}
+
+#[test]
+fn a_border_of_one_colour_with_a_side_missing_keeps_its_rounded_corners() {
+    // (YouTube's search box: rounded on the left, no border on the right.)
+    let mut p = page(
+        "<body style='margin:0'><div style='box-sizing:border-box;width:200px;height:40px;border:1px solid red;\
+         border-right:0;border-radius:40px 0 0 40px'></div></body>",
+    );
+    let l = laid(&mut p);
+    let borders: Vec<_> = l.items.iter().filter_map(|i| match &i.paint {
+        Paint::Border { widths, color, radius, .. } => Some((*widths, *color, *radius)),
+        _ => None,
+    }).collect();
+    assert_eq!(borders, [([1.0, 0.0, 1.0, 1.0], RED, [20.0, 0.0, 0.0, 20.0])]);
+}
+
+#[test]
+fn a_buttons_words_are_in_the_middle_of_its_height() {
+    let mut p = page(
+        "<body style='margin:0'><div><button style='padding:0;border:0;background:red'>One</button></div>\
+         <div><button style='padding:0;border:0;background:blue;height:40px'>Two</button></div></body>",
+    );
+    let l = laid(&mut p);
+    let (one, two) = (rects(l, RED)[0], rects(l, BLUE)[0]);
+    let (y1, y2) = (words(l, "One").1, words(l, "Two").1);
+    assert_eq!(two.3, 40.0);
+    // (Moved down by whole pixels, as Chrome draws it: 12.5 is 12.)
+    assert_eq!(y2 - two.1, y1 - one.1 + crate::num::floor((40.0 - one.3) / 2.0));
+}
+
+#[test]
+fn an_svg_is_filled_as_the_page_s_style_sheets_say() {
+    // (YouTube's icons: fill: currentcolor on the box round the <svg>, the colour blue; and a rule for one path.)
+    let mut p = page(
+        "<html><head><style>.x { fill: #ff0000 } .round { fill: currentcolor; color: #065fd4 }</style></head>\
+         <body><div class=round><svg viewBox='0 0 24 24' width=24><path d='M0 0h24v24H0z'/>\
+         <path class=x fill=green d='M0 0h2v2H0z'/><path fill=none d='M0 0h4v4H0z'/></svg></div>\
+         <svg width=10 fill=yellow><path d='M0 0h1v1H0z'/></svg></body></html>",
+    );
+    let ty = Type::builtin();
+    p.lay_out(&ty, 600.0, 400.0, 1.0);
+    let mut svgs = Vec::new();
+    while let Some((_, _, _, inline)) = p.next_wanted() {
+        svgs.push(String::from_utf8(inline.unwrap()).unwrap());
+    }
+    let icon = svgs.iter().find(|s| s.contains("width=\"24\"")).expect("the icon's picture");
+    assert!(icon.starts_with("<svg color=\"#065fd4\" viewbox=\"0 0 24 24\" width=\"24\" fill=\"currentColor\">"), "{icon}");
+    assert!(icon.contains("<path class=\"x\" d=\"M0 0h2v2H0z\" fill=\"#ff0000\">"), "{icon}");
+    assert!(icon.contains("<path fill=\"none\" d=\"M0 0h4v4H0z\">"), "{icon}");
+    // (An <svg> the page's style sheets say nothing of: as its own text says.)
+    assert!(svgs.iter().any(|s| s.contains("width=\"10\" fill=\"yellow\"")), "{svgs:?}");
 }

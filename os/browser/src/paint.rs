@@ -112,14 +112,23 @@ impl Painter {
                     let r = Shape::new(x + ox as f32, y + oy as f32, *w, *h, *radius);
                     shape(surface, &r, None, item_clip, *color);
                 }
-                Paint::Border { x, y, w, h, width, color, radius } => {
+                Paint::Border { x, y, w, h, widths, color, radius } => {
+                    let [t, r, b, l] = *widths;
                     let outer = Shape::new(x + ox as f32, y + oy as f32, *w, *h, *radius);
-                    let inner = Shape::new(x + ox as f32 + width, y + oy as f32 + width, w - 2.0 * width, h - 2.0 * width, (radius - width).max(0.0));
+                    // (Each inner corner rounded less by the wider of the two sides it's between.)
+                    let inner_radii = [(radius[0] - t.max(l)).max(0.0), (radius[1] - t.max(r)).max(0.0), (radius[2] - b.max(r)).max(0.0), (radius[3] - b.max(l)).max(0.0)];
+                    let inner = Shape::new(x + ox as f32 + l, y + oy as f32 + t, w - l - r, h - t - b, inner_radii);
                     shape(surface, &outer, Some(&inner), item_clip, *color);
                 }
                 Paint::Gradient { x, y, w, h, angle, stops, radius } => {
                     let r = Shape::new(x + ox as f32, y + oy as f32, *w, *h, *radius);
                     gradient(surface, &r, *angle, stops, item_clip);
+                }
+                Paint::Shadow { x, y, w, h, radius, dx, dy, blur, spread, color } => {
+                    let own = Shape::new(x + ox as f32, y + oy as f32, *w, *h, *radius);
+                    let grow = |r: f32| if r > 0.0 || *spread < 0.0 { (r + spread).max(0.0) } else { 0.0 };
+                    let cast = Shape::new(x + ox as f32 + dx - spread, y + oy as f32 + dy - spread, w + 2.0 * spread, h + 2.0 * spread, radius.map(grow));
+                    shadow(surface, &cast, &own, *blur, *color, item_clip);
                 }
                 Paint::Picture { x, y, w, h, n, cover, radius } => {
                     if let Some((rgb, pw, ph)) = pictures.picture(*n) {
@@ -187,12 +196,19 @@ impl Painter {
             }
             // (Words reach a little past their box: slanted letters, accents.)
             Paint::Text { x, y, w, line, size, .. } => (*x - size * 0.5, *y - size * 0.3, *w + *size, *line + size * 0.6),
+            // (A shadow reaches as far as it's moved, grown and blurred.)
+            Paint::Shadow { x, y, w, h, dx, dy, blur, spread, .. } => {
+                let reach = spread.max(0.0) + blur;
+                let (x0, y0) = (x.min(x + dx - reach), y.min(y + dy - reach));
+                let (x1, y1) = ((x + w).max(x + dx + w + reach), (y + h).max(y + dy + h + reach));
+                (x0, y0, x1 - x0, y1 - y0)
+            }
         };
         Area::from_f(x + ox as f32, y + oy as f32, w, h)
     }
 
     fn ink(&mut self, ty: &Type, text: &str, face: Face, size: f32, line: f32) -> &Ink {
-        let key = InkKey { text: String::from(text), face: face as u8, size: (size * 256.0) as i32, line: (line * 256.0) as i32 };
+        let key = InkKey { text: String::from(text), face: face.key(), size: (size * 256.0) as i32, line: (line * 256.0) as i32 };
         let round = self.round;
         if !self.inks.contains_key(&key) {
             let ink = ty.ink_in(text, face, text::Style { size: key.size, line_height: key.line }, 0);
@@ -263,24 +279,56 @@ fn fill(s: &mut Surface, a: Area, color: Color, cover: u32) {
     }
 }
 
-/// A rectangle with rounded corners, in fractions of pixels.
+/// A rectangle with rounded corners (top left, top right, bottom right, bottom left), in fractions of pixels.
 struct Shape {
     x: f32,
     y: f32,
     w: f32,
     h: f32,
+    radii: [f32; 4],
+    /// The largest of them: the rows and columns further in than it are clear of every corner.
     radius: f32,
 }
 
 impl Shape {
-    fn new(x: f32, y: f32, w: f32, h: f32, radius: f32) -> Shape {
+    fn new(x: f32, y: f32, w: f32, h: f32, radii: [f32; 4]) -> Shape {
         let w = w.max(0.0);
         let h = h.max(0.0);
-        Shape { x, y, w, h, radius: radius.min(w / 2.0).min(h / 2.0).max(0.0) }
+        let mut radii = radii.map(|r| r.max(0.0));
+        // (Corners that would overlap made smaller together, as CSS has it.)
+        let f = [(radii[0] + radii[1], w), (radii[3] + radii[2], w), (radii[0] + radii[3], h), (radii[1] + radii[2], h)]
+            .iter()
+            .filter(|(sum, _)| *sum > 0.0)
+            .map(|(sum, side)| side / sum)
+            .fold(1.0f32, f32::min);
+        if f < 1.0 {
+            for r in &mut radii {
+                *r *= f;
+            }
+        }
+        let radius = radii.iter().copied().fold(0.0f32, f32::max);
+        Shape { x, y, w, h, radii, radius }
     }
 
     fn area(&self) -> Area {
         Area::from_f(self.x, self.y, self.w, self.h)
+    }
+
+    /// How far a point is outside the shape (inside: negative), its corners' rounding counted.
+    fn distance(&self, px: f32, py: f32) -> f32 {
+        let (cx, cy) = (self.x + self.w / 2.0, self.y + self.h / 2.0);
+        let (qx0, qy0) = (px - cx, py - cy);
+        let r = match (qx0 < 0.0, qy0 < 0.0) {
+            (true, true) => self.radii[0],
+            (false, true) => self.radii[1],
+            (false, false) => self.radii[2],
+            (true, false) => self.radii[3],
+        };
+        let qx = qx0.abs() - self.w / 2.0 + r;
+        let qy = qy0.abs() - self.h / 2.0 + r;
+        let (ox, oy) = (qx.max(0.0), qy.max(0.0));
+        let outside = crate::num::sqrt(ox * ox + oy * oy);
+        outside + qx.max(qy).min(0.0) - r
     }
 
     /// Whether a point is inside.
@@ -288,15 +336,25 @@ impl Shape {
         if px < self.x || py < self.y || px >= self.x + self.w || py >= self.y + self.h {
             return false;
         }
-        let r = self.radius;
-        if r <= 0.0 {
+        if self.radius <= 0.0 {
             return true;
         }
         // (Within a corner's square: inside its circle.)
-        let cx = if px < self.x + r { self.x + r } else if px > self.x + self.w - r { self.x + self.w - r } else { return true };
-        let cy = if py < self.y + r { self.y + r } else if py > self.y + self.h - r { self.y + self.h - r } else { return true };
+        let (x0, y0, x1, y1) = (self.x, self.y, self.x + self.w, self.y + self.h);
+        let r = &self.radii;
+        let (cx, cy, rad) = if px < x0 + r[0] && py < y0 + r[0] {
+            (x0 + r[0], y0 + r[0], r[0])
+        } else if px > x1 - r[1] && py < y0 + r[1] {
+            (x1 - r[1], y0 + r[1], r[1])
+        } else if px > x1 - r[2] && py > y1 - r[2] {
+            (x1 - r[2], y1 - r[2], r[2])
+        } else if px < x0 + r[3] && py > y1 - r[3] {
+            (x0 + r[3], y1 - r[3], r[3])
+        } else {
+            return true;
+        };
         let (dx, dy) = (px - cx, py - cy);
-        dx * dx + dy * dy <= r * r
+        dx * dx + dy * dy <= rad * rad
     }
 
     /// How much of the pixel at (x, y) is inside, of 255: whole pixels well inside or outside at once, the edges
@@ -358,6 +416,66 @@ fn shape(s: &mut Surface, outer: &Shape, hole: Option<&Shape>, clip: Area, color
                 *p = over(*p, color, cover);
             }
             x += 1;
+        }
+    }
+}
+
+/// erf(x), to 1.5e-7 (Abramowitz and Stegun 7.1.26).
+fn erf(x: f32) -> f32 {
+    let s = if x < 0.0 { -1.0 } else { 1.0 };
+    let x = x * s;
+    let t = 1.0 / (1.0 + 0.327_591_1 * x);
+    let y = 1.0 - (((((1.061_405_4 * t - 1.453_152_1) * t) + 1.421_413_8) * t - 0.284_496_74) * t + 0.254_829_6) * t * libm_exp(-x * x);
+    s * y
+}
+
+/// e^x, for the blur's falloff (core has no exp): by halving x until it's small, a few terms of its series, then
+/// squaring back.
+fn libm_exp(x: f32) -> f32 {
+    if x < -40.0 {
+        return 0.0;
+    }
+    let mut k = 0;
+    let mut y = x;
+    while y.abs() > 0.5 && k < 64 {
+        y /= 2.0;
+        k += 1;
+    }
+    let mut r = 1.0 + y * (1.0 + y * (0.5 + y * (1.0 / 6.0 + y * (1.0 / 24.0 + y / 120.0))));
+    for _ in 0..k {
+        r *= r;
+    }
+    r
+}
+
+/// A box's shadow: `cast` (the box moved, grown) blurred by `blur` (CSS's blur radius: twice the Gaussian's standard
+/// deviation), drawn only where the box itself (`own`) isn't, as browsers draw it.
+fn shadow(s: &mut Surface, cast: &Shape, own: &Shape, blur: f32, color: Color, clip: Area) {
+    let reach = blur.max(0.0) * 1.5 + 1.0;
+    let a = Area::from_f(cast.x - reach, cast.y - reach, cast.w + 2.0 * reach, cast.h + 2.0 * reach).intersect(&clip);
+    if a.empty() {
+        return;
+    }
+    let sigma = (blur / 2.0).max(0.0);
+    for y in a.y..a.b {
+        let row = y as usize * s.width;
+        for x in a.x..a.r {
+            let mine = own.cover(x, y);
+            if mine >= 255 {
+                continue;
+            }
+            let cover = if sigma < 0.5 {
+                cast.cover(x, y)
+            } else {
+                // How far the pixel's middle is outside the cast shape (inside: negative), softened by the blur.
+                let d = cast.distance(x as f32 + 0.5, y as f32 + 0.5);
+                (0.5 * (1.0 - erf(d / (sigma * core::f32::consts::SQRT_2))) * 255.0 + 0.5) as u32
+            };
+            let cover = cover.min(255) * (255 - mine) / 255;
+            if cover > 0 {
+                let p = &mut s.pixels[row + x as usize];
+                *p = over(*p, color, cover);
+            }
         }
     }
 }
@@ -579,7 +697,7 @@ mod tests {
     fn a_rounded_rectangle_leaves_its_corners_out() {
         let mut px = alloc::vec![0u32; 20 * 20];
         let mut s = Surface { pixels: &mut px, width: 20, height: 20, clip: (0, 0, 20, 20) };
-        shape(&mut s, &Shape::new(0.0, 0.0, 20.0, 20.0, 8.0), None, Area::new(0, 0, 20, 20), 0xFFFF_FFFF);
+        shape(&mut s, &Shape::new(0.0, 0.0, 20.0, 20.0, [8.0; 4]), None, Area::new(0, 0, 20, 20), 0xFFFF_FFFF);
         assert_eq!(px[0], 0, "the corner itself stays");
         assert_eq!(px[10 * 20 + 10], 0xFFFFFF, "the middle is filled");
         assert_eq!(px[10 * 20], 0xFFFFFF, "an edge's middle is filled");
@@ -589,8 +707,8 @@ mod tests {
     fn a_border_leaves_its_inside_as_it_was() {
         let mut px = alloc::vec![0x111111u32; 30 * 30];
         let mut s = Surface { pixels: &mut px, width: 30, height: 30, clip: (0, 0, 30, 30) };
-        let outer = Shape::new(0.0, 0.0, 30.0, 30.0, 6.0);
-        let inner = Shape::new(2.0, 2.0, 26.0, 26.0, 4.0);
+        let outer = Shape::new(0.0, 0.0, 30.0, 30.0, [6.0; 4]);
+        let inner = Shape::new(2.0, 2.0, 26.0, 26.0, [4.0; 4]);
         shape(&mut s, &outer, Some(&inner), Area::new(0, 0, 30, 30), 0xFFFF_0000);
         assert_eq!(px[15 * 30 + 15], 0x111111);
         assert_eq!(px[15 * 30], 0xFF0000);
@@ -602,7 +720,7 @@ mod tests {
     fn a_gradient_goes_from_its_first_colour_to_its_last() {
         let mut px = alloc::vec![0u32; 10 * 100];
         let mut s = Surface { pixels: &mut px, width: 10, height: 100, clip: (0, 0, 10, 100) };
-        gradient(&mut s, &Shape::new(0.0, 0.0, 10.0, 100.0, 0.0), 180.0, &[(0xFF00_0000, -1.0), (0xFFFF_FFFF, -1.0)], Area::new(0, 0, 10, 100));
+        gradient(&mut s, &Shape::new(0.0, 0.0, 10.0, 100.0, [0.0; 4]), 180.0, &[(0xFF00_0000, -1.0), (0xFFFF_FFFF, -1.0)], Area::new(0, 0, 10, 100));
         assert!(px[5] & 0xFF < 0x10, "the top is black: {:06x}", px[5]);
         assert!(px[99 * 10 + 5] & 0xFF > 0xF0, "the bottom is white: {:06x}", px[99 * 10 + 5]);
     }

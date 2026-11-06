@@ -63,14 +63,24 @@ td, th { display: table-cell; vertical-align: inherit; padding: 1px; }
 th { font-weight: bold; text-align: center; }
 table > tr, table > thead, table > tbody, table > tfoot { vertical-align: middle; }
 
+/* Form controls, as Chrome's own sheet has them (its sizes, borders and box-sizing: checked against Chromium). */
 input, select, button, textarea, meter, progress { display: inline-block; }
-input, select, textarea, button { font-size: 13.333px; font-family: sans-serif; color: FieldText; letter-spacing: normal; }
+input, select, textarea, button { font-size: 13.333px; font-family: sans-serif; color: FieldText; letter-spacing: normal;
+  word-spacing: normal; line-height: normal; text-transform: none; text-indent: 0; text-shadow: none; text-align: start;
+  margin: 0; }
 input, textarea { background-color: Field; border: 2px inset #767676; padding: 1px 2px; }
-select { background-color: Field; border: 1px solid #767676; border-radius: 3px; padding: 1px 2px; }
+textarea { border: 1px solid #767676; padding: 2px; font-family: monospace; }
+select { background-color: Field; border: 1px solid #767676; border-radius: 0; padding: 0; box-sizing: border-box; }
 button, input[type=submit i], input[type=button i], input[type=reset i], input[type=file i]::file-selector-button {
   background-color: ButtonFace; color: ButtonText; border: 2px outset ButtonBorder; padding: 1px 6px; text-align: center;
+  box-sizing: border-box;
 }
-input[type=checkbox i], input[type=radio i] { margin: 3px 3px 3px 4px; padding: 0; border: 0; }
+input[type=search i] { box-sizing: border-box; }
+input[type=checkbox i], input[type=radio i] { margin: 3px 3px 3px 4px; padding: 0; border: 0; box-sizing: border-box; }
+input[type=radio i] { margin: 3px 3px 0 5px; }
+input[type=color i] { box-sizing: border-box; border: 1px solid #767676; padding: 1px 2px; }
+input[type=range i] { margin: 2px; padding: 0; border: 0; }
+input[type=file i] { padding: 0; border: 0; }
 input[type=image i] { border: 0; padding: 0; }
 fieldset { margin-left: 2px; margin-right: 2px; padding: 0.35em 0.75em 0.625em; border: 2px groove ThreeDFace; }
 legend { padding-left: 2px; padding-right: 2px; }
@@ -80,6 +90,10 @@ img, svg, video, canvas, iframe, embed, object { overflow: clip; }
 summary { display: block; }
 dialog[open] { display: block; position: absolute; left: 0; right: 0; margin: auto; border: solid; padding: 1em;
   background-color: Canvas; color: CanvasText; width: fit-content; }
+/* A popover isn't shown until a script shows it (showPopover); then it's over the page, in the middle of the window. */
+[popover] { position: fixed; inset: 0; width: fit-content; height: fit-content; margin: auto; border: solid;
+  padding: 0.25em; overflow: auto; color: CanvasText; background-color: Canvas; }
+[popover]:not(:popover-open):not(dialog[open]) { display: none; }
 marquee { display: inline-block; }
 optgroup, option { display: block; }
 select option, select optgroup { display: none; }

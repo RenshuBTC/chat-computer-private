@@ -438,9 +438,9 @@ pub fn init(vm: &mut Vm) {
     method(vm, hp, "click", 0, click);
     method(vm, hp, "focus", 0, focus);
     method(vm, hp, "blur", 0, blur);
-    method(vm, hp, "showPopover", 0, ignore_fn);
-    method(vm, hp, "hidePopover", 0, ignore_fn);
-    method(vm, hp, "togglePopover", 0, false_fn);
+    method(vm, hp, "showPopover", 0, show_popover);
+    method(vm, hp, "hidePopover", 0, hide_popover);
+    method(vm, hp, "togglePopover", 0, toggle_popover);
     method(vm, hp, "attachInternals", 0, attach_internals);
     for name in super::events::HANDLERS {
         handler_property(vm, hp, name);
@@ -638,6 +638,53 @@ fn zero_fn(_vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
 }
 fn ignore_fn(_vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
     Ok(Value::Undefined)
+}
+
+/// Shows or hides a popover (an element with a popover attribute): :popover-open matches it while it shows, and its
+/// toggle event says so. Returns whether it shows now.
+fn set_popover(vm: &mut Vm, this: &Value, show: Option<bool>) -> Result<bool, Value> {
+    let n = this_element(vm, this)?;
+    if attr(vm, n, "popover").is_none() {
+        return Err(dom_exception(vm, "NotSupportedError", "Not supported on elements that do not have a valid value for the 'popover' attribute."));
+    }
+    let open = doc(vm).popovers.contains(&n);
+    let want = show.unwrap_or(!open);
+    if want != open {
+        let d = &mut host(vm).doc;
+        if want {
+            d.popovers.push(n);
+        } else {
+            d.popovers.retain(|&p| p != n);
+        }
+        d.version += 1;
+        host(vm).changed();
+        let (old, new) = if want { ("closed", "open") } else { ("open", "closed") };
+        let e = super::events::EventInit::new("toggle", "Event", false, false)
+            .with("oldState", super::events::EvValue::Str(String::from(old)))
+            .with("newState", super::events::EvValue::Str(String::from(new)));
+        let w = wrap(vm, n);
+        super::events::fire(vm, &w, &e);
+    }
+    Ok(want)
+}
+
+fn show_popover(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    set_popover(vm, this, Some(true))?;
+    Ok(Value::Undefined)
+}
+
+fn hide_popover(vm: &mut Vm, this: &Value, _args: &[Value], _f: Gc) -> R {
+    set_popover(vm, this, Some(false))?;
+    Ok(Value::Undefined)
+}
+
+fn toggle_popover(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
+    let force = match arg(args, 0) {
+        Value::Bool(b) => Some(b),
+        Value::Undefined => None,
+        v => Some(v.truthy()),
+    };
+    Ok(Value::Bool(set_popover(vm, this, force)?))
 }
 fn empty_string(_vm: &mut Vm, _this: &Value, _args: &[Value], _f: Gc) -> R {
     Ok(js(""))
@@ -1917,6 +1964,13 @@ fn set_inner_html(vm: &mut Vm, this: &Value, args: &[Value], _f: Gc) -> R {
     // (A <template>'s: what's in its content.)
     let target = if context == "template" && doc(vm).element(n).is_some() { host(vm).doc.template_content(n) } else { n };
     replace_all(vm, target, Some(f));
+    // The custom elements it made are upgraded before it returns, in the page or not (not in a template's contents).
+    if target == n && !in_template(doc(vm), n) {
+        let kids: Vec<NodeId> = doc(vm).children(n).to_vec();
+        for k in kids {
+            upgrade_tree(vm, k);
+        }
+    }
     Ok(Value::Undefined)
 }
 
@@ -2521,6 +2575,9 @@ fn html_element_new(vm: &mut Vm, nt: &Value, _args: &[Value], _f: Gc) -> R {
     let w = wrap(vm, n);
     if let Value::Obj(g) = w {
         vm.heap.get_mut(g).proto = Some(p);
+        // (Made by its own constructor, a custom element is one from the start: it isn't upgraded again, its
+        // constructor run a second time, when it's put in the page.)
+        set_slot(vm, g, host_ref(vm).syms.event, Value::Bool(true));
     }
     Ok(w)
 }

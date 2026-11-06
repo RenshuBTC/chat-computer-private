@@ -138,7 +138,7 @@ struct Font {
 
 impl Font {
     fn initial() -> Font {
-        Font { text: String::from("10px sans-serif"), size: 10.0, face: Face::Sans }
+        Font { text: String::from("10px sans-serif"), size: 10.0, face: Face::Web(text::Family::Sans, false, false) }
     }
 }
 
@@ -1519,17 +1519,7 @@ fn parse_font(s: &str) -> Option<Font> {
         return None;
     }
     let (mono, sans) = crate::style::kind_of_families(family);
-    let face = match (mono, sans, bold, italic) {
-        (true, ..) => Face::Mono,
-        (_, true, true, true) => Face::SansBoldItalic,
-        (_, true, true, false) => Face::SansBold,
-        (_, true, false, true) => Face::SansItalic,
-        (_, true, false, false) => Face::Sans,
-        (_, false, true, true) => Face::BoldItalic,
-        (_, false, true, false) => Face::Bold,
-        (_, false, false, true) => Face::Italic,
-        (_, false, false, false) => Face::Regular,
-    };
+    let face = Face::Web(crate::style::family_of(mono, sans), bold, italic);
     let mut out = String::new();
     if italic {
         out.push_str("italic ");

@@ -399,10 +399,13 @@ drivers.
   the site's cookies, kept while it runs; each of its files up to 32 MB, as a big site's script is: YouTube's is
   10.7 MB, which it sends uncompressed to a browser it doesn't know), its HTML read as browsers read it (quirks mode too), its style sheets and
   pictures fetched a few at a time as it asks for them, its CSS cascaded (selectors, @media, custom properties,
-  calc(), modern colours; its text in Lora, or Atkinson Hyperlegible Next where it asks for a sans-serif family, or
-  the code font; its pictures JPEG, PNG, GIF or SVG, an <svg> in the page drawn as a picture too, see-through where
-  they are) and laid out: blocks with their margins collapsing, lines of words wrapping round floats,
-  flex, grid, tables, positioned boxes, lists; borders solid, dashed, dotted or double, rounded, inset or outset. It scrolls with the wheel, the arrows and Page Up and Down; a click
+  calc(), modern colours; its text in the metric twins of the fonts Chrome uses on Windows, Times New Roman, Arial
+  and Courier New (`fonts/build_web.py`), so its words take the room and its lines the height they take in Chrome; its
+  pictures JPEG, PNG, GIF or SVG, an <svg> in the page drawn as a picture too, see-through where they are) and laid
+  out (checked against Chromium drawing the same files, element by element: rem as the root's font size, a flex
+  line's height given to what stretches across it, fields as Chrome sizes them): blocks with their margins collapsing, lines of words wrapping round floats,
+  flex, grid, tables, positioned boxes, lists; borders solid, dashed, dotted or double, rounded (each corner its
+  own), inset or outset; shadows. It scrolls with the wheel, the arrows and Page Up and Down; a click
   follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter (or its button) sends its
   form (GET or POST), its submit event first. Without a pointer, Tab goes through its links, buttons and fields in
   order (scrolled into view, a blue ring round the one chosen), and Enter or the space bar presses it as a click
@@ -947,8 +950,12 @@ writes for each person, in place of Ubuntu's catalogue.
     cookies; checked in a virtual PC against a stand-in site, and on Wikipedia's, Hacker News' and Google's pages).
     ✓ Scripts: a JavaScript engine of its own (96% of Ecma's test262's language tests, 96% of its built-ins'), the
     DOM, events, timers,
-    fetch, modules, layout worked out when a script asks for a box's size. ✓ A sans-serif font for pages that ask
-    for one. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
+    fetch, modules, layout worked out when a script asks for a box's size. ✓ Pages drawn as Chrome draws them, checked
+    against Chromium (headless, drawing the same files) element by element: the metric twins of Chrome's fonts, line
+    heights as Chrome works them out, its form controls' sizes, rem, flex items stretched as it stretches them,
+    custom elements constructed once, popovers, each corner rounded its own, box shadows, a flex or grid item's
+    children's margins kept inside it, an <svg> filled as the page's style sheets say. To do there: web fonts
+    (@font-face), CSS masks (icons drawn through them), and the rest of what comparing sites with Chrome turns up. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
     plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time
     zone. To do: touchpads.

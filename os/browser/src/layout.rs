@@ -19,17 +19,21 @@ use text::{Face, Type};
 /// What's drawn, in order (the page's top left at 0, 0).
 #[derive(Clone, Debug)]
 pub enum Paint {
-    /// A rectangle filled (its corners rounded).
-    Rect { x: f32, y: f32, w: f32, h: f32, color: Color, radius: f32 },
-    /// A border all round a rectangle, `width` thick, its corners rounded (the inside left as it is).
-    Border { x: f32, y: f32, w: f32, h: f32, width: f32, color: Color, radius: f32 },
+    /// A rectangle filled (its corners rounded: top left, top right, bottom right, bottom left).
+    Rect { x: f32, y: f32, w: f32, h: f32, color: Color, radius: [f32; 4] },
+    /// A border round a rectangle, each side its own width thick (top, right, bottom, left), its corners rounded (the
+    /// inside left as it is).
+    Border { x: f32, y: f32, w: f32, h: f32, widths: [f32; 4], color: Color, radius: [f32; 4] },
     /// A linear gradient filling a rectangle: its angle (degrees, 180 down) and colours with their stops (0..1).
-    Gradient { x: f32, y: f32, w: f32, h: f32, angle: f32, stops: Vec<(Color, f32)>, radius: f32 },
+    Gradient { x: f32, y: f32, w: f32, h: f32, angle: f32, stops: Vec<(Color, f32)>, radius: [f32; 4] },
     /// Words: where their line box's top left is, how wide they are, in which face and size (and line height), and
     /// colour.
     Text { x: f32, y: f32, w: f32, text: String, face: Face, size: f32, line: f32, color: Color },
     /// A picture (the page's `n`th), filling a rectangle (`cover`: cut to fill it, else squeezed into it).
-    Picture { x: f32, y: f32, w: f32, h: f32, n: usize, cover: bool, radius: f32 },
+    Picture { x: f32, y: f32, w: f32, h: f32, n: usize, cover: bool, radius: [f32; 4] },
+    /// A box's shadow (x, y, w, h, radius: the box's border box): moved by (dx, dy), grown by `spread`, blurred by
+    /// `blur`, and drawn only outside the box.
+    Shadow { x: f32, y: f32, w: f32, h: f32, radius: [f32; 4], dx: f32, dy: f32, blur: f32, spread: f32, color: Color },
 }
 
 #[derive(Clone, Debug)]
@@ -125,41 +129,42 @@ pub struct Layout<'a> {
     intrinsic: Vec<Option<(f32, f32)>>,
     /// Widths of words already measured (by face and size), to measure each once.
     widths: alloc::collections::BTreeMap<(String, u8, u32), f32>,
+    /// The content height a box's next layout is to have, given it by its container (a stretched flex item's): its
+    /// height is then definite, so its insides' percentages of it mean something.
+    definite_h: Option<(BoxId, f32)>,
 }
 
+/// The face a style's words are set in: its family's web font (Chrome's defaults' metric twins), bold and italic as
+/// it says.
 fn face_of(s: &Style) -> Face {
-    if s.mono {
-        return Face::Mono;
-    }
-    match (s.is_bold(), s.italic, s.sans) {
-        (true, true, false) => Face::BoldItalic,
-        (true, false, false) => Face::Bold,
-        (false, true, false) => Face::Italic,
-        (false, false, false) => Face::Regular,
-        (true, true, true) => Face::SansBoldItalic,
-        (true, false, true) => Face::SansBold,
-        (false, true, true) => Face::SansItalic,
-        (false, false, true) => Face::Sans,
-    }
+    Face::Web(s.family(), s.is_bold(), s.italic)
 }
 
 fn face_key(f: Face) -> u8 {
-    match f {
-        Face::Regular => 0,
-        Face::Bold => 1,
-        Face::Italic => 2,
-        Face::BoldItalic => 3,
-        Face::Mono => 4,
-        Face::Sans => 5,
-        Face::SansBold => 6,
-        Face::SansItalic => 7,
-        Face::SansBoldItalic => 8,
-    }
+    f.key()
 }
 
 /// Chinese, Japanese and Korean (a line can break between their characters).
 fn cjk(c: char) -> bool {
     matches!(c as u32, 0x2E80..=0x2FFF | 0x3000..=0x33FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF)
+}
+
+/// A box's corners' radii (top left, top right, bottom right, bottom left), `w` × `h`: a percentage of its smaller side,
+/// and corners that would overlap made smaller together, by the side that needs it most (CSS's rule).
+fn radii(s: &Style, w: f32, h: f32) -> [f32; 4] {
+    let base = w.min(h).max(0.0);
+    let mut r = s.radius.map(|l| (l.px + l.pct * base / 100.0).max(0.0));
+    let f = [(r[0] + r[1], w), (r[3] + r[2], w), (r[0] + r[3], h), (r[1] + r[2], h)]
+        .iter()
+        .filter(|(sum, _)| *sum > 0.0)
+        .map(|(sum, side)| side.max(0.0) / sum)
+        .fold(1.0f32, f32::min);
+    if f < 1.0 {
+        for x in &mut r {
+            *x *= f;
+        }
+    }
+    r
 }
 
 /// A float placed: its margin box, and which side it's on.
@@ -224,6 +229,7 @@ impl<'a> Layout<'a> {
             scopes: Vec::new(),
             intrinsic: vec![None; n],
             widths: alloc::collections::BTreeMap::new(),
+            definite_h: None,
         }
     }
 
@@ -352,7 +358,9 @@ impl<'a> Layout<'a> {
             Content::Control(c) => Some(self.control_size(b, c.clone())),
             _ => None,
         };
-        let ratio = s.aspect_ratio.or(natural.filter(|(w, h)| *w > 0.0 && *h > 0.0).map(|(w, h)| w / h));
+        // (A picture keeps its shape; a field doesn't: its height is its line's, however wide it's made.)
+        let shaped = !matches!(content, Content::Control(_));
+        let ratio = s.aspect_ratio.or(natural.filter(|(w, h)| shaped && *w > 0.0 && *h > 0.0).map(|(w, h)| w / h));
         let w = s.width.len().filter(|l| !l.has_pct() || cb_w > 0.0).map(|l| self.content_from(b, l, cb_w, true));
         let h = s.height.len().filter(|l| !l.has_pct() || cb_h.is_some()).map(|l| self.content_from(b, l, cb_h.unwrap_or(0.0), false));
         let (w, h) = match (w, h, ratio) {
@@ -381,21 +389,20 @@ impl<'a> Layout<'a> {
         (w, h)
     }
 
-    /// A field's size, as browsers make one: about 20 characters wide, a line high (its words', for a button).
+    /// A field's size (its content box), as Chrome makes one: a text field 20 characters wide (its size attribute's
+    /// number: Chrome's average character, and room for its widest), a line of its line height high; a button its
+    /// words' width.
     fn control_size(&mut self, b: BoxId, c: Control) -> (f32, f32) {
         let s = self.tree.boxes[b].style.clone();
-        let line = s.font_size * 1.2;
+        let line = s.line_px();
         match c {
-            Control::Text { .. } | Control::Select(_) => {
-                let words = match &c {
-                    Control::Select(w) => self.measure(w, face_of(&s), s.font_size) + s.font_size * 1.5,
-                    _ => s.font_size * 11.0,
-                };
-                (words, line)
-            }
+            Control::Text { size, .. } => (s.font_size * (0.6 * size as f32 + 1.4), line),
+            // (The widest option, and room for the arrow.)
+            Control::Select(_, widest) => (self.measure(&widest, face_of(&s), s.font_size) + s.font_size * 1.8, line),
             Control::Button(words) => (self.measure(&words, face_of(&s), s.font_size), line),
             Control::Check { .. } => (13.0 * self.dpr, 13.0 * self.dpr),
-            Control::Area { .. } => (s.font_size * 11.0, line * 2.0),
+            // (Its characters a monospace font's, and room for its scroll bar.)
+            Control::Area { cols, rows, .. } => (s.font_size * 0.6 * cols as f32 + 16.0 * self.dpr, line * rows as f32),
         }
     }
 
@@ -420,7 +427,7 @@ impl<'a> Layout<'a> {
     fn baseline(&self, s: &Style) -> (f32, f32) {
         let line = s.line_px().max(0.0);
         let size = (s.font_size * 256.0) as i32;
-        let b = self.ty.baseline(text::Style { size, line_height: (line * 256.0) as i32 }) as f32 / 256.0;
+        let b = self.ty.baseline_in(face_of(s), text::Style { size, line_height: (line * 256.0) as i32 }) as f32 / 256.0;
         (b, line)
     }
 
@@ -668,9 +675,17 @@ impl<'a> Layout<'a> {
             bx.w = border_w;
             bx.done = true;
         }
-        // Its own height, when it has one it can know now.
-        let own_h: Option<f32> = match s.height {
-            Size::Len(l) if !l.has_pct() || cb_h.is_some() => Some(self.content_from(b, l, cb_h.unwrap_or(0.0), false)),
+        // Its own height, when it has one it can know now (or its container gave it one).
+        let given = match self.definite_h {
+            Some((d, h)) if d == b => {
+                self.definite_h = None;
+                Some(h)
+            }
+            _ => None,
+        };
+        let own_h: Option<f32> = match (given, s.height) {
+            (Some(h), _) => Some(h),
+            (None, Size::Len(l)) if !l.has_pct() || cb_h.is_some() => Some(self.content_from(b, l, cb_h.unwrap_or(0.0), false)),
             _ => s.aspect_ratio.filter(|_| !replaced).map(|r| content_w / r),
         };
         let content_x = x + self.tree.boxes[b].border[3] + self.tree.boxes[b].padding[3];
@@ -699,7 +714,26 @@ impl<'a> Layout<'a> {
             Some(h) => h,
             None => self.clamp_h(b, content_h, cb_h),
         };
+        // (A button's insides in the middle of its height, as Chrome puts them: an icon in a 40px button.)
+        if self.tree.boxes[b].centered && !replaced && !matches!(s.display, Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid) && content_h < h {
+            self.shift_inside(b, crate::num::floor((h - content_h) / 2.0));
+        }
         self.tree.boxes[b].h = h + frame_h;
+    }
+
+    /// Moves what's inside a box (its lines and its boxes), not the box itself.
+    fn shift_inside(&mut self, b: BoxId, dy: f32) {
+        if dy == 0.0 {
+            return;
+        }
+        if let Some(f) = self.frags.get_mut(b) {
+            for fr in f.iter_mut() {
+                fr.y += dy;
+            }
+        }
+        for k in self.tree.boxes[b].children.clone() {
+            self.shift(k, 0.0, dy);
+        }
     }
 
     /// A block container's insides: lines of inline content, or blocks one under another (margins collapsing).
@@ -874,8 +908,16 @@ impl<'a> Layout<'a> {
     /// formatting context).
     fn collapses_top(&self, b: BoxId) -> bool {
         let x = &self.tree.boxes[b];
-        b != 0 && x.border[0] == 0.0 && x.padding[0] == 0.0 && !x.style.new_context() && matches!(x.content, Content::Children)
+        b != 0 && x.border[0] == 0.0 && x.padding[0] == 0.0 && !self.own_context(b) && matches!(x.content, Content::Children)
             && !matches!(x.style.display, Display::Flex | Display::Grid | Display::Table | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::TableCell)
+    }
+
+    /// Whether a box's insides are a formatting context of their own (its children's margins kept inside it): as its
+    /// style makes it, or as a flex or grid container's item is.
+    fn own_context(&self, b: BoxId) -> bool {
+        let x = &self.tree.boxes[b];
+        x.style.new_context()
+            || x.parent.is_some_and(|p| matches!(self.tree.boxes[p].style.display, Display::Flex | Display::Grid | Display::InlineFlex | Display::InlineGrid))
     }
 
     fn collapses_bottom(&self, b: BoxId) -> bool {
@@ -884,7 +926,7 @@ impl<'a> Layout<'a> {
 
     fn collapses_top_bottom(&self, b: BoxId) -> bool {
         let x = &self.tree.boxes[b];
-        b != 0 && x.border[2] == 0.0 && x.padding[2] == 0.0 && !x.style.new_context() && matches!(x.content, Content::Children)
+        b != 0 && x.border[2] == 0.0 && x.padding[2] == 0.0 && !self.own_context(b) && matches!(x.content, Content::Children)
             && !matches!(x.style.display, Display::Flex | Display::Grid | Display::Table | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::TableCell)
     }
 
@@ -1321,7 +1363,7 @@ impl<'a> Layout<'a> {
                     Piece::Atomic { b: k, .. } => {
                         let kb = &self.tree.boxes[*k];
                         let mh = kb.h + kb.margin[0] + kb.margin[2];
-                        let field = matches!(kb.content, Content::Control(Control::Text { .. } | Control::Button(_) | Control::Select(_)));
+                        let field = matches!(kb.content, Content::Control(Control::Text { .. } | Control::Button(_) | Control::Select(..)));
                         let a = match (kb.style.vertical_align, kb.baseline) {
                             (VAlign::Middle, _) => mh / 2.0 + s.font_size * 0.25,
                             (VAlign::Top | VAlign::TextTop, _) => strut_base,
@@ -1707,7 +1749,9 @@ impl<'a> Layout<'a> {
                 }
             };
             let per_auto = if autos > 0 { free / autos as f32 } else { 0.0 };
-            // Lay each out at its size, in its place along the line.
+            // Lay each out at its size, in its place along the line. (A single line in a container whose height is
+            // definite is that high, and what stretches across it is laid out that high, less its margins.)
+            let definite_line = if single { h } else { None };
             let mut line_h = 0.0f32;
             let mut placed: Vec<(BoxId, f32)> = Vec::new();
             for it in &its[r.clone()] {
@@ -1717,6 +1761,13 @@ impl<'a> Layout<'a> {
                 }
                 let (ml, mr) = (self.tree.boxes[k].margin[3], self.tree.boxes[k].margin[1]);
                 let border_w = it.size + self.frame_w(k);
+                if let Some(lh) = definite_line
+                    && self.stretches(b, k)
+                {
+                    let (mt, mb) = (self.tree.boxes[k].margin[0], self.tree.boxes[k].margin[2]);
+                    let inner = self.clamp_h(k, (lh - mt - mb - self.frame_h(k)).max(0.0), h);
+                    self.definite_h = Some((k, inner));
+                }
                 self.block(k, x + pen, at, border_w + ml + mr, h, Some(border_w), false);
                 let mh = self.tree.boxes[k].h + self.tree.boxes[k].margin[0] + self.tree.boxes[k].margin[2];
                 line_h = line_h.max(mh);
@@ -1727,8 +1778,8 @@ impl<'a> Layout<'a> {
                 }
                 pen += gap + between;
             }
-            if single && let Some(hh) = h {
-                line_h = line_h.max(hh);
+            if let Some(hh) = definite_line {
+                line_h = hh;
             }
             // Aligned across the line (stretched where the item's height is auto).
             for (k, mh) in placed {
@@ -1740,7 +1791,7 @@ impl<'a> Layout<'a> {
                 match align {
                     Align::Center => self.shift(k, 0.0, top + (line_h - mh) / 2.0 - oy),
                     Align::End => self.shift(k, 0.0, top + line_h - mh - oy),
-                    Align::Normal | Align::Stretch if ks.height == Size::Auto && ks.aspect_ratio.is_none() => {
+                    Align::Normal | Align::Stretch if self.stretches(b, k) => {
                         self.shift(k, 0.0, top - oy);
                         let mb = self.tree.boxes[k].margin[2];
                         let stretched = (line_h - mt - mb).max(self.tree.boxes[k].h);
@@ -1768,6 +1819,18 @@ impl<'a> Layout<'a> {
             self.tree.boxes[b].baseline = Some(by - self.tree.boxes[b].y);
         }
         (at - y).max(0.0)
+    }
+
+    /// Whether flex item `k` of container `b` stretches across its line: aligned so (stretch, or normal), its height
+    /// auto, and neither of its margins across the line auto.
+    fn stretches(&self, b: BoxId, k: BoxId) -> bool {
+        let (s, ks) = (&self.tree.boxes[b].style, &self.tree.boxes[k].style);
+        let align = if ks.align_self != Align::Normal { ks.align_self } else { s.align_items };
+        matches!(align, Align::Normal | Align::Stretch)
+            && ks.height == Size::Auto
+            && ks.aspect_ratio.is_none()
+            && ks.margin[0] != Size::Auto
+            && ks.margin[2] != Size::Auto
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2372,12 +2435,31 @@ impl<'a> Layout<'a> {
             self.tree.boxes[b].h = h;
         }
         let bh = self.tree.boxes[b].h;
+        // Auto margins, with both sides' insets given and a size of its own (not stretched between them), share the
+        // room left over: "inset: 0; margin: auto" centres it (a dialog, a popover, a site's own modal).
+        let auto = |i: usize| s.margin[i] == Size::Auto;
         let nx = match (left, right) {
+            (Some(l), Some(r)) if s.width != Size::Auto && (auto(3) || auto(1)) => {
+                let free = cw - l - r - bw - if auto(3) { 0.0 } else { ml } - if auto(1) { 0.0 } else { mr };
+                cx + l + match (auto(3), auto(1)) {
+                    (true, true) => (free / 2.0).max(0.0),
+                    (true, false) => free,
+                    _ => ml,
+                }
+            }
             (Some(l), _) => cx + l + ml,
             (None, Some(r)) => cx + cw - r - mr - bw,
             _ => static_x + ml,
         };
         let ny = match (top, bottom) {
+            (Some(t), Some(bo)) if s.height != Size::Auto && (auto(0) || auto(2)) => {
+                let free = ch - t - bo - bh - if auto(0) { 0.0 } else { mt } - if auto(2) { 0.0 } else { mb };
+                cy + t + match (auto(0), auto(2)) {
+                    (true, true) => (free / 2.0).max(0.0),
+                    (true, false) => free.max(0.0),
+                    _ => mt,
+                }
+            }
             (Some(t), _) => cy + t + mt,
             (None, Some(bo)) => cy + ch - bo - mb - bh,
             _ => static_y + mt,
@@ -2531,12 +2613,29 @@ impl<'a> Layout<'a> {
         let s = x.style.clone();
         let node = x.node;
         let (bx, by, bw, bh) = (x.x, x.y, x.w, x.h);
-        let radius = s.radius.min(bw / 2.0).min(bh / 2.0).max(0.0);
+        let radius = radii(&s, bw, bh);
         let border = x.border;
         let padding = x.padding;
         let mut out: Vec<Paint> = Vec::new();
         // (The root's background is the page's: the canvas, drawn by whoever draws the page. A masked one is an
         // icon's shape: not drawn.)
+        if let Some(sh) = s.shadow.filter(|sh| values::alpha(sh.color) > 0)
+            && b != 0
+            && !s.masked
+        {
+            out.push(Paint::Shadow {
+                x: bx,
+                y: by,
+                w: bw,
+                h: bh,
+                radius,
+                dx: sh.x,
+                dy: sh.y,
+                blur: sh.blur,
+                spread: sh.spread,
+                color: Self::fade(sh.color, opacity),
+            });
+        }
         if b != 0 && values::alpha(s.background) > 0 && !s.masked {
             out.push(Paint::Rect { x: bx, y: by, w: bw, h: bh, color: Self::fade(s.background, opacity), radius });
         }
@@ -2563,8 +2662,14 @@ impl<'a> Layout<'a> {
         let uniform = sides.len() == 4
             && border.iter().all(|&w| (w - border[0]).abs() < 0.01)
             && (0..4).all(|k| shade(k) == shade(0) && !patterned(k));
-        if uniform {
-            out.push(Paint::Border { x: bx, y: by, w: bw, h: bh, width: border[0], color: shade(0), radius });
+        // (Sides of one colour, solid, round a rounded box: one border, its corners rounded, whatever each side's
+        // width, as YouTube's search box has it with no right side.)
+        let one_colour = !sides.is_empty()
+            && radius.iter().any(|&r| r > 0.0)
+            && sides.iter().all(|&k| shade(k) == shade(sides[0]) && !patterned(k));
+        if uniform || one_colour {
+            let widths = core::array::from_fn(|k| if sides.contains(&k) { border[k] } else { 0.0 });
+            out.push(Paint::Border { x: bx, y: by, w: bw, h: bh, widths, color: shade(sides[0]), radius });
         } else {
             for &k in &sides {
                 let r = match k {
@@ -2574,7 +2679,7 @@ impl<'a> Layout<'a> {
                     _ => Rect::new(bx, by, border[3], bh),
                 };
                 for (piece, round) in border_pieces(r, k, s.border_style[k]) {
-                    out.push(Paint::Rect { x: piece.x, y: piece.y, w: piece.w, h: piece.h, color: shade(k), radius: round });
+                    out.push(Paint::Rect { x: piece.x, y: piece.y, w: piece.w, h: piece.h, color: shade(k), radius: [round; 4] });
                 }
             }
         }
@@ -2598,7 +2703,7 @@ impl<'a> Layout<'a> {
             }
             Content::Image { .. } if cw > 0.0 && ch > 0.0 => {
                 // (A picture that hasn't come, or can't be shown: its place, for clicks on a link round it.)
-                items.push(Item { paint: Paint::Rect { x: cx, y: cy, w: cw, h: ch, color: 0, radius: 0.0 }, clip, node });
+                items.push(Item { paint: Paint::Rect { x: cx, y: cy, w: cw, h: ch, color: 0, radius: [0.0; 4] }, clip, node });
             }
             Content::Control(c) => self.paint_control(b, c, cx, cy, cw, ch, clip, opacity, items),
             _ => {}
@@ -2618,7 +2723,7 @@ impl<'a> Layout<'a> {
             }
         };
         match c {
-            Control::Text { value, placeholder, password } => {
+            Control::Text { value, placeholder, password, .. } => {
                 if value.is_empty() {
                     words(placeholder, 0xFF75_7575, items, cx);
                 } else if password {
@@ -2627,7 +2732,7 @@ impl<'a> Layout<'a> {
                     words(value, s.color, items, cx);
                 }
             }
-            Control::Area { value, placeholder } => {
+            Control::Area { value, placeholder, .. } => {
                 let shown = if value.is_empty() { placeholder } else { value };
                 let color = if shown.is_empty() { s.color } else { s.color };
                 items.push(Item { paint: Paint::Text { x: cx, y: cy, w: cw, text: shown.lines().next().unwrap_or("").into(), face: face_of(&s), size: s.font_size, line: lh, color: Self::fade(color, opacity) }, clip: inside, node });
@@ -2637,20 +2742,20 @@ impl<'a> Layout<'a> {
                 let x = cx + ((cw - w) / 2.0).max(0.0);
                 words(text, s.color, items, x);
             }
-            Control::Select(text) => {
+            Control::Select(text, _) => {
                 words(text, s.color, items, cx);
                 let arrow_x = cx + cw - s.font_size * 0.9;
-                items.push(Item { paint: Paint::Text { x: arrow_x, y: text_y, w: s.font_size, text: String::from("\u{25BE}"), face: Face::Regular, size: s.font_size, line: lh, color: Self::fade(s.color, opacity) }, clip: inside, node });
+                items.push(Item { paint: Paint::Text { x: arrow_x, y: text_y, w: s.font_size, text: String::from("\u{25BE}"), face: face_of(&s), size: s.font_size, line: lh, color: Self::fade(s.color, opacity) }, clip: inside, node });
             }
             Control::Check { checked, radio } => {
                 let side = cw.min(ch);
                 let r = if radio { side / 2.0 } else { 2.0 * self.dpr };
-                items.push(Item { paint: Paint::Rect { x: cx, y: cy, w: side, h: side, color: Self::fade(0xFF76_7676, opacity), radius: r }, clip, node });
+                items.push(Item { paint: Paint::Rect { x: cx, y: cy, w: side, h: side, color: Self::fade(0xFF76_7676, opacity), radius: [r; 4] }, clip, node });
                 let bw = 1.0 * self.dpr;
-                items.push(Item { paint: Paint::Rect { x: cx + bw, y: cy + bw, w: side - 2.0 * bw, h: side - 2.0 * bw, color: Self::fade(if checked { 0xFF00_75FF } else { values::WHITE }, opacity), radius: (r - bw).max(0.0) }, clip, node });
+                items.push(Item { paint: Paint::Rect { x: cx + bw, y: cy + bw, w: side - 2.0 * bw, h: side - 2.0 * bw, color: Self::fade(if checked { 0xFF00_75FF } else { values::WHITE }, opacity), radius: [(r - bw).max(0.0); 4] }, clip, node });
                 if checked {
                     let dot = side * 0.4;
-                    items.push(Item { paint: Paint::Rect { x: cx + (side - dot) / 2.0, y: cy + (side - dot) / 2.0, w: dot, h: dot, color: Self::fade(values::WHITE, opacity), radius: if radio { dot / 2.0 } else { 0.0 } }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: cx + (side - dot) / 2.0, y: cy + (side - dot) / 2.0, w: dot, h: dot, color: Self::fade(values::WHITE, opacity), radius: [if radio { dot / 2.0 } else { 0.0 }; 4] }, clip, node });
                 }
             }
         }
@@ -2671,13 +2776,13 @@ impl<'a> Layout<'a> {
                 let thick = (s.font_size / 16.0).max(1.0);
                 let dc = Self::fade(s.decoration_color.unwrap_or(s.color), opacity);
                 if s.underline {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo + s.font_size * 0.12, w: f.w, h: thick, color: dc, radius: 0.0 }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo + s.font_size * 0.12, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
                 }
                 if s.line_through {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo - s.font_size * 0.3, w: f.w, h: thick, color: dc, radius: 0.0 }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo - s.font_size * 0.3, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
                 }
                 if s.overline {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo - s.font_size * 0.95, w: f.w, h: thick, color: dc, radius: 0.0 }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo - s.font_size * 0.95, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
                 }
             }
             FragKind::Marker { text, owner } => {
@@ -2690,23 +2795,23 @@ impl<'a> Layout<'a> {
                 let x = &self.tree.boxes[*owner];
                 let border = x.border;
                 if values::alpha(s.background) > 0 {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y, w: f.w, h: f.h, color: Self::fade(s.background, opacity), radius: s.radius.min(f.h / 2.0) }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y, w: f.w, h: f.h, color: Self::fade(s.background, opacity), radius: radii(&s, f.w, f.h) }, clip, node });
                 } else {
                     // (No background: a box for clicks on the link, drawn as nothing.)
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y, w: f.w, h: f.h, color: 0, radius: 0.0 }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y, w: f.w, h: f.h, color: 0, radius: [0.0; 4] }, clip, node });
                 }
                 let c = |k: usize| Self::fade(s.border_color[k], opacity);
                 if border[0] > 0.0 && s.border_style[0] != BorderStyle::None {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y, w: f.w, h: border[0], color: c(0), radius: 0.0 }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y, w: f.w, h: border[0], color: c(0), radius: [0.0; 4] }, clip, node });
                 }
                 if border[2] > 0.0 && s.border_style[2] != BorderStyle::None {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + f.h - border[2], w: f.w, h: border[2], color: c(2), radius: 0.0 }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + f.h - border[2], w: f.w, h: border[2], color: c(2), radius: [0.0; 4] }, clip, node });
                 }
                 if *first && border[3] > 0.0 && s.border_style[3] != BorderStyle::None {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y, w: border[3], h: f.h, color: c(3), radius: 0.0 }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y, w: border[3], h: f.h, color: c(3), radius: [0.0; 4] }, clip, node });
                 }
                 if *last && border[1] > 0.0 && s.border_style[1] != BorderStyle::None {
-                    items.push(Item { paint: Paint::Rect { x: f.x + f.w - border[1], y: f.y, w: border[1], h: f.h, color: c(1), radius: 0.0 }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x + f.w - border[1], y: f.y, w: border[1], h: f.h, color: c(1), radius: [0.0; 4] }, clip, node });
                 }
             }
         }

@@ -14,16 +14,18 @@ pub type BoxId = usize;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Control {
-    /// A text field: what's in it (or its placeholder, in grey), and whether it's a password's (dots).
-    Text { value: String, placeholder: String, password: bool },
+    /// A text field: what's in it (or its placeholder, in grey), whether it's a password's (dots), and how many
+    /// characters wide it's made (its size attribute: 20 if it has none).
+    Text { value: String, placeholder: String, password: bool, size: u16 },
     /// A button made by an input (submit, reset, button): its words.
     Button(String),
     /// A checkbox or a radio button.
     Check { checked: bool, radio: bool },
-    /// A drop-down list: the option chosen.
-    Select(String),
-    /// Several lines of text.
-    Area { value: String, placeholder: String },
+    /// A drop-down list: the option chosen, and the widest option's words (it's made as wide as they are).
+    Select(String, String),
+    /// Several lines of text: what's in it (or its placeholder), and how many characters wide and lines high it's
+    /// made (its cols and rows: 20 and 2 if it has none).
+    Area { value: String, placeholder: String, cols: u16, rows: u16 },
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +61,8 @@ pub struct LBox {
     pub baseline: Option<f32>,
     /// It's laid out (out-of-flow boxes wait for their containing block).
     pub done: bool,
+    /// Its insides are centred in its height (a <button>'s, as Chrome centres them).
+    pub centered: bool,
 }
 
 impl LBox {
@@ -151,6 +155,7 @@ impl Tree {
             padding: [0.0; 4],
             baseline: None,
             done: false,
+            centered: false,
         });
         if let Some(p) = parent {
             self.boxes[p].children.push(id);
@@ -206,6 +211,7 @@ impl Tree {
                         padding: [0.0; 4],
                         baseline: None,
                         done: false,
+            centered: false,
                     });
                     let kids: Vec<BoxId> = tree.boxes[a].children.clone();
                     for k in kids {
@@ -260,6 +266,7 @@ impl Tree {
                         padding: [0.0; 4],
                         baseline: None,
                         done: false,
+            centered: false,
                     });
                     let kids: Vec<BoxId> = tree.boxes[a].children.clone();
                     for k in kids {
@@ -421,24 +428,35 @@ impl Builder<'_> {
                     "checkbox" | "radio" => Content::Control(Control::Check { checked: el.has_attr("checked"), radio: kind == "radio" }),
                     "image" => Content::Image { image: self.pictures.picture(self.doc, node), alt: String::from(el.attr("alt").unwrap_or("")) },
                     "file" => Content::Control(Control::Button(String::from("Choose a file"))),
-                    "range" | "color" => Content::Control(Control::Text { value: String::new(), placeholder: String::new(), password: false }),
+                    "range" | "color" => Content::Control(Control::Text { value: String::new(), placeholder: String::new(), password: false, size: 20 }),
                     _ => Content::Control(Control::Text {
                         value,
                         placeholder: String::from(el.attr("placeholder").unwrap_or("")),
                         password: kind == "password",
+                        size: el.attr("size").and_then(|n| n.trim().parse::<u16>().ok()).filter(|n| (1..=1000).contains(n)).unwrap_or(20),
                     }),
                 }
             }
-            "textarea" => Content::Control(Control::Area {
-                value: el.attr("value").map(String::from).unwrap_or_else(|| self.doc.text_of(node)),
-                placeholder: String::from(el.attr("placeholder").unwrap_or("")),
-            }),
+            "textarea" => {
+                let number = |name: &str, default: u16| el.attr(name).and_then(|n| n.trim().parse::<u16>().ok()).filter(|n| (1..=1000).contains(n)).unwrap_or(default);
+                Content::Control(Control::Area {
+                    value: el.attr("value").map(String::from).unwrap_or_else(|| self.doc.text_of(node)),
+                    placeholder: String::from(el.attr("placeholder").unwrap_or("")),
+                    cols: number("cols", 20),
+                    rows: number("rows", 2),
+                })
+            }
             "select" => {
                 // The option chosen: the one marked selected, else the first.
                 let options: Vec<NodeId> = self.doc.descendants(node).filter(|&d| self.doc.name(d) == "option").collect();
                 let chosen = options.iter().copied().find(|&o| self.doc.element(o).is_some_and(|e| e.has_attr("selected"))).or(options.first().copied());
                 let words = chosen.map(|o| String::from(self.doc.text_of(o).trim())).unwrap_or_default();
-                Content::Control(Control::Select(words))
+                let widest = options
+                    .iter()
+                    .map(|&o| String::from(self.doc.text_of(o).trim()))
+                    .max_by_key(|w| w.chars().count())
+                    .unwrap_or_default();
+                Content::Control(Control::Select(words, widest))
             }
             _ => Content::Children,
         };
@@ -453,6 +471,7 @@ impl Builder<'_> {
             _ => style,
         };
         let b = self.tree.push(Some(node), style, content, Some(parent));
+        self.tree.boxes[b].centered = name == "button";
         if walk && !matches!(name, "select" | "textarea" | "template") {
             self.children_of(node, b);
         }

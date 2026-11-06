@@ -255,12 +255,22 @@ pub struct Style {
     pub border_width: [f32; 4],
     pub border_style: [BorderStyle; 4],
     pub border_color: [Color; 4],
-    pub radius: f32,
+    /// Its corners' rounding: top left, top right, bottom right, bottom left (circular: a percentage of its smaller
+    /// side, so 50% rounds a square into a circle).
+    pub radius: [Len; 4],
+    /// Its box-shadow: the first outside its border box (an inset one isn't drawn).
+    pub shadow: Option<Shadow>,
     pub border_box: bool,
     pub color: Color,
     pub background: Color,
     pub background_image: Option<Image>,
     pub font_size: f32,
+    /// How many times "medium" its font size is, when it comes from a keyword (medium, small...: the page's own,
+    /// or none it inherited unchanged, or em and % of one): 0 when it doesn't. Chrome's medium is 13px rather than 16
+    /// in the generic monospace family alone, and such a size follows it.
+    pub keyword_size: f32,
+    /// Its font family is the generic monospace one alone ("monospace": not "monospace, monospace").
+    pub generic_mono: bool,
     pub font_weight: u16,
     pub italic: bool,
     pub mono: bool,
@@ -318,6 +328,30 @@ pub struct Style {
     pub masked: bool,
     /// A table's caption goes under it (caption-side: bottom).
     pub caption_bottom: bool,
+    /// What an <svg>'s shapes are filled and outlined with, as the page's style sheets say (inherited; none: as the
+    /// picture's own text says).
+    pub fill: Option<SvgPaint>,
+    pub stroke: Option<SvgPaint>,
+}
+
+/// An SVG paint (a fill or a stroke) a style sheet gives: none, currentColor or a colour.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum SvgPaint {
+    None,
+    Current,
+    Color(Color),
+}
+
+impl SvgPaint {
+    /// As an SVG attribute's value.
+    pub fn svg(self) -> String {
+        match self {
+            SvgPaint::None => String::from("none"),
+            SvgPaint::Current => String::from("currentColor"),
+            SvgPaint::Color(c) if c >> 24 == 0xFF => alloc::format!("#{:06x}", c & 0x00FF_FFFF),
+            SvgPaint::Color(c) => alloc::format!("#{:06x}{:02x}", c & 0x00FF_FFFF, c >> 24),
+        }
+    }
 }
 
 impl Style {
@@ -341,12 +375,15 @@ impl Style {
             border_width: [0.0; 4],
             border_style: [BorderStyle::None; 4],
             border_color: [values::BLACK; 4],
-            radius: 0.0,
+            radius: [Len::ZERO; 4],
+            shadow: None,
             border_box: false,
             color: values::BLACK,
             background: values::TRANSPARENT,
             background_image: None,
             font_size: 16.0 * dpr,
+            keyword_size: 1.0,
+            generic_mono: false,
             font_weight: 400,
             italic: false,
             mono: false,
@@ -399,6 +436,8 @@ impl Style {
             hidden_text: false,
             masked: false,
             caption_bottom: false,
+            fill: None,
+            stroke: None,
         }
     }
 
@@ -407,6 +446,8 @@ impl Style {
         let mut s = Style::initial(dpr);
         s.color = self.color;
         s.font_size = self.font_size;
+        s.keyword_size = self.keyword_size;
+        s.generic_mono = self.generic_mono;
         s.font_weight = self.font_weight;
         s.italic = self.italic;
         s.mono = self.mono;
@@ -431,16 +472,24 @@ impl Style {
         s.overline = self.overline;
         s.decoration_color = self.decoration_color;
         s.hidden_text = self.hidden_text;
+        s.fill = self.fill;
+        s.stroke = self.stroke;
         s
     }
 
     /// The line height in device pixels.
     pub fn line_px(&self) -> f32 {
         match self.line_height {
-            LineHeight::Normal => self.font_size * 1.25,
+            // (From its font's own ascent, descent and line gap, as Chrome works it out.)
+            LineHeight::Normal => self.family().normal_line(self.font_size),
             LineHeight::Factor(f) => self.font_size * f,
             LineHeight::Px(p) => p,
         }
+    }
+
+    /// Its kind of font: Chrome's default serif, sans-serif or monospace.
+    pub fn family(&self) -> text::Family {
+        family_of(self.mono, self.sans)
     }
 
     pub fn is_positioned(&self) -> bool {
@@ -553,6 +602,10 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
     while let Some((id, parent)) = stack.pop() {
         let mine = if c.doc.element(id).is_some() {
             let s = Arc::new(c.style_of(id, &parent));
+            // (Every other element's rem is the root's font size: 10px on a page that sets it so, as many do.)
+            if c.doc.parent(id) == Some(0) {
+                c.rem = s.font_size;
+            }
             c.out.of[id] = Some(s.clone());
             s
         } else {
@@ -782,7 +835,7 @@ impl Cascade<'_> {
                 if d.name.starts_with("--") {
                     continue;
                 }
-                let early = matches!(d.name.as_str(), "font-size" | "font");
+                let early = matches!(d.name.as_str(), "font-size" | "font" | "font-family");
                 let colour = d.name == "color";
                 let wanted = match pass {
                     0 => early,
@@ -807,6 +860,10 @@ impl Cascade<'_> {
                 apply_one(&mut s, &d.name, v, &ctx);
             }
             if pass == 0 {
+                // (A keyword's size, medium's 13px in the generic monospace family alone, as Chrome makes it.)
+                if s.keyword_size > 0.0 {
+                    s.font_size = s.keyword_size * if s.generic_mono { 13.0 } else { 16.0 } * self.dpr;
+                }
                 ctx.units.em = s.font_size;
                 if is_root {
                     // (rem is the root's font size.)
@@ -979,15 +1036,7 @@ fn hints(doc: &Document, id: NodeId) -> Vec<Decl> {
     if name == "hr" && let Some(w) = el.attr("width").and_then(dim) {
         add("width", w);
     }
-    if name == "input" && let Some(sz) = el.attr("size").and_then(|s| s.trim().parse::<f32>().ok()) {
-        add("width", alloc::format!("{}em", sz * 0.55 + 0.5));
-    }
-    if name == "textarea" {
-        let cols = el.attr("cols").and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(20.0);
-        let rows = el.attr("rows").and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(2.0);
-        add("width", alloc::format!("{}em", cols * 0.55));
-        add("height", alloc::format!("{}em", rows * 1.25));
-    }
+    // (An input's size and a textarea's cols and rows make their natural size: layout.rs.)
     out
 }
 
@@ -1206,6 +1255,7 @@ fn pseudo(doc: &Document, sib: &SiblingInfo, id: NodeId, p: &Pseudo) -> bool {
         Pseudo::Required => el.has_attr("required"),
         Pseudo::Optional => !el.has_attr("required") && matches!(el.name.as_str(), "input" | "select" | "textarea"),
         Pseudo::PlaceholderShown => el.has_attr("placeholder") && el.attr("value").unwrap_or("").is_empty(),
+        Pseudo::PopoverOpen => el.has_attr("popover") && doc.popovers.contains(&id),
         Pseudo::Never => false,
     }
 }
@@ -1423,6 +1473,70 @@ fn font_size(v: &[Tok], c: &Ctx) -> Option<f32> {
     Some((l.px + l.pct * parent / 100.0).max(0.0))
 }
 
+/// How many times "medium" a font size is, when it comes from a keyword or is em or % of one (0 when it doesn't).
+fn keyword_size(v: &[Tok], c: &Ctx) -> f32 {
+    let parent = c.parent.keyword_size;
+    if let Some(i) = ident(v) {
+        return match i.as_str() {
+            "xx-small" => 9.0 / 16.0,
+            "x-small" => 10.0 / 16.0,
+            "small" => 13.0 / 16.0,
+            "medium" => 1.0,
+            "large" => 18.0 / 16.0,
+            "x-large" => 1.5,
+            "xx-large" => 2.0,
+            "xxx-large" => 3.0,
+            "smaller" => parent / 1.2,
+            "larger" => parent * 1.2,
+            _ => 0.0,
+        };
+    }
+    match values::trim(v) {
+        [Tok::Dimension(n, u)] if u.eq_ignore_ascii_case("em") => parent * n,
+        [Tok::Percent(n)] => parent * n / 100.0,
+        _ => 0.0,
+    }
+}
+
+/// A box shadow: how far it's moved (x, y), its blur radius and spread (device pixels), and its colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shadow {
+    pub x: f32,
+    pub y: f32,
+    pub blur: f32,
+    pub spread: f32,
+    pub color: Color,
+}
+
+/// The first of a box-shadow's shadows that's outside the box (none: "none", or only inset ones).
+fn box_shadow(v: &[Tok], units: &Units, current: Color) -> Option<Shadow> {
+    for one in css::split_commas(v) {
+        let mut lengths: Vec<f32> = Vec::new();
+        let mut color = None;
+        let mut inset = false;
+        for t in parts(one) {
+            if ident(t).as_deref() == Some("inset") {
+                inset = true;
+            } else if let Some(l) = values::length(t, units, 0.0) {
+                lengths.push(l.px);
+            } else if let Some(c) = values::color(t, current) {
+                color = Some(c);
+            }
+        }
+        if inset || lengths.len() < 2 {
+            continue;
+        }
+        let at = |i: usize| lengths.get(i).copied().unwrap_or(0.0);
+        return Some(Shadow { x: at(0), y: at(1), blur: at(2).max(0.0), spread: at(3), color: color.unwrap_or(current) });
+    }
+    None
+}
+
+/// Whether a font-family is the generic monospace family alone.
+fn generic_mono(v: &[Tok]) -> bool {
+    matches!(values::trim(v), [Tok::Ident(i)] if i.eq_ignore_ascii_case("monospace"))
+}
+
 fn font_weight(v: &[Tok], parent: u16) -> Option<u16> {
     if let Some(i) = ident(v) {
         return Some(match i.as_str() {
@@ -1469,6 +1583,17 @@ const SERIF_WORDS: &[&str] = &[
     "book", "charter", "iowan", "crimson", "caslon", "didot", "bodoni", "minion", "constantia", "spectral",
     "literata", "new york", "tiempos", "mincho", "songti",
 ];
+
+/// The kind of font for what `family_kind` found: monospace, sans-serif, or (else) serif.
+pub fn family_of(mono: bool, sans: bool) -> text::Family {
+    if mono {
+        text::Family::Mono
+    } else if sans {
+        text::Family::Sans
+    } else {
+        text::Family::Serif
+    }
+}
 
 /// What a font-family list written out asks for (a canvas's font): (monospace, sans-serif), as `family_kind`.
 pub fn kind_of_families(list: &str) -> (bool, bool) {
@@ -1738,7 +1863,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
             "initial" | "unset" | "revert" | "revert-layer" => {
                 let init = Style::initial(c.units.dpr);
-                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "visibility" | "list-style-type" | "text-transform" | "font-family" | "font");
+                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "visibility" | "list-style-type" | "text-transform" | "font-family" | "font" | "fill" | "stroke");
                 if kw == "initial" || !inherited {
                     inherit_one(s, &init, name);
                 } else {
@@ -1947,15 +2072,56 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 s.border_color[side(name)] = x;
             }
         }
-        "border-radius" | "border-top-left-radius" | "-webkit-border-radius" => {
-            if let Some(first) = parts(v).first()
-                && let Some(l) = values::length(first, units, 0.0)
-            {
-                // (A percentage: of its size, which isn't known yet; 50% makes a circle of a square.)
-                s.radius = if l.pct >= 50.0 { 1.0e6 } else { l.px + l.pct * 0.1 * units.em };
+        "border-radius" | "-webkit-border-radius" => {
+            // Up to four: the corners' (horizontal) radii, from the top left round; what's after a "/" (their vertical
+            // ones, for ellipses) is left out.
+            let mut found: Vec<Len> = Vec::new();
+            for t in parts(v) {
+                if values::trim(t).first() == Some(&Tok::Delim('/')) {
+                    break;
+                }
+                if let Some(l) = values::length(t, units, 0.0) {
+                    found.push(l);
+                }
+            }
+            if !found.is_empty() {
+                let g = |i: usize| found[i.min(found.len() - 1)];
+                s.radius = match found.len() {
+                    1 => [g(0); 4],
+                    2 => [g(0), g(1), g(0), g(1)],
+                    3 => [g(0), g(1), g(2), g(1)],
+                    _ => [g(0), g(1), g(2), g(3)],
+                };
             }
         }
+        "border-top-left-radius" | "border-top-right-radius" | "border-bottom-right-radius" | "border-bottom-left-radius"
+        | "border-start-start-radius" | "border-start-end-radius" | "border-end-end-radius" | "border-end-start-radius" => {
+            let corner = match name {
+                "border-top-left-radius" | "border-start-start-radius" => 0,
+                "border-top-right-radius" | "border-start-end-radius" => 1,
+                "border-bottom-right-radius" | "border-end-end-radius" => 2,
+                _ => 3,
+            };
+            if let Some(l) = parts(v).first().and_then(|first| values::length(first, units, 0.0)) {
+                s.radius[corner] = l;
+            }
+        }
+        "box-shadow" | "-webkit-box-shadow" => s.shadow = box_shadow(v, units, s.color),
         "box-sizing" => s.border_box = ident(v).as_deref() == Some("border-box"),
+        "fill" | "stroke" => {
+            let paint = match ident(v).as_deref() {
+                Some("none") => Some(SvgPaint::None),
+                Some("currentcolor") => Some(SvgPaint::Current),
+                _ => values::color(v, cur).map(SvgPaint::Color),
+            };
+            if paint.is_some() {
+                if name == "fill" {
+                    s.fill = paint;
+                } else {
+                    s.stroke = paint;
+                }
+            }
+        }
         "color" => {
             if let Some(x) = values::color(v, p.color) {
                 s.color = x;
@@ -1977,6 +2143,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
         "font-size" => {
             if let Some(x) = font_size(v, c) {
                 s.font_size = x;
+                s.keyword_size = keyword_size(v, c);
             }
         }
         "font-weight" => {
@@ -1989,7 +2156,10 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 s.italic = i == "italic" || i == "oblique";
             }
         }
-        "font-family" => (s.mono, s.sans) = family_kind(v),
+        "font-family" => {
+            (s.mono, s.sans) = family_kind(v);
+            s.generic_mono = generic_mono(v);
+        }
         "font" => {
             // [style] [variant] [weight] [stretch] size[/line-height] family
             let ps = parts(v);
@@ -2014,6 +2184,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                         _ => {
                             if let Some(sz) = font_size(t, c) {
                                 s.font_size = sz;
+                                s.keyword_size = keyword_size(t, c);
                                 k += 1;
                                 break;
                             }
@@ -2024,6 +2195,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                     s.font_weight = n.clamp(1.0, 1000.0) as u16;
                 } else if let Some(sz) = font_size(t, c) {
                     s.font_size = sz;
+                    s.keyword_size = keyword_size(t, c);
                     k += 1;
                     break;
                 } else {
@@ -2042,6 +2214,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
             let rest: Vec<Tok> = ps.iter().skip(k).flat_map(|x| x.iter().cloned().chain(core::iter::once(Tok::Ws))).collect();
             (s.mono, s.sans) = family_kind(&rest);
+            s.generic_mono = generic_mono(&rest);
         }
         "line-height" => {
             if let Some(x) = line_height(v, c, s.font_size) {
@@ -2545,19 +2718,25 @@ fn side(name: &str) -> usize {
 fn inherit_one(s: &mut Style, from: &Style, name: &str) {
     match name {
         "color" => s.color = from.color,
-        "font-size" => s.font_size = from.font_size,
+        "font-size" => {
+            s.font_size = from.font_size;
+            s.keyword_size = from.keyword_size;
+        }
         "font-weight" => s.font_weight = from.font_weight,
         "font-style" => s.italic = from.italic,
         "font-family" => {
             s.mono = from.mono;
             s.sans = from.sans;
+            s.generic_mono = from.generic_mono;
         }
         "font" => {
             s.font_size = from.font_size;
+            s.keyword_size = from.keyword_size;
             s.font_weight = from.font_weight;
             s.italic = from.italic;
             s.mono = from.mono;
             s.sans = from.sans;
+            s.generic_mono = from.generic_mono;
             s.line_height = from.line_height;
         }
         "line-height" => s.line_height = from.line_height,
@@ -2604,6 +2783,8 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "z-index" => s.z_index = from.z_index,
         "content" => s.content = from.content.clone(),
         "vertical-align" => s.vertical_align = from.vertical_align,
+        "fill" => s.fill = from.fill,
+        "stroke" => s.stroke = from.stroke,
         _ => {}
     }
 }

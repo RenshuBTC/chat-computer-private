@@ -32,6 +32,62 @@ static CJK: &[u8] = include_bytes!("../../fonts/ChatComputerCJK.ttf");
 /// The sans-serif family, for web pages that ask for one: Atkinson Hyperlegible Next (the font engine's test font,
 /// and Chat Computer's own before Lora; a variable font from weight 200 to 800, OFL: `font/testdata`).
 static SANS: &[u8] = include_bytes!("../../font/testdata/AtkinsonHyperlegibleNext.ttf");
+/// Web pages' fonts: the metric twins of Chrome's defaults on Windows (Times New Roman, Arial, Courier New), so a
+/// page's words take the room, and its lines the height, they take in Chrome (`fonts/build_web.py`: from Tinos, Arimo
+/// and Cousine, OFL). Their regular, bold, italic and bold italic; the sans-serif's two are variable (its bold an
+/// instance).
+static WEB: [&[u8]; 10] = [
+    include_bytes!("../../fonts/ChatComputerWebSerif-Regular.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebSerif-Bold.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebSerif-Italic.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebSerif-BoldItalic.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebSans.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebSans-Italic.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebMono-Regular.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebMono-Bold.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebMono-Italic.ttf"),
+    include_bytes!("../../fonts/ChatComputerWebMono-BoldItalic.ttf"),
+];
+/// Their ascent, descent and line gap as the originals have them, in 2048ths of the em (exactly Times New Roman's,
+/// Arial's and Courier New's, whose metric twins they are): a line's height is worked out from these as Chrome does.
+const WEB_METRICS: [(i32, i32, i32); 3] = [(1825, 443, 87), (1854, 434, 67), (1705, 615, 0)];
+
+/// A web page's kind of font: Chrome's default serif (Times New Roman), sans-serif (Arial) or monospace (Courier New).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Family {
+    Serif,
+    Sans,
+    Mono,
+}
+
+impl Family {
+    /// A line's height in `normal` line height at `size` pixels, as Chrome works it out: the font's ascent, descent
+    /// and line gap, each rounded to whole pixels.
+    pub fn normal_line(self, size: f32) -> f32 {
+        let (a, d, g) = self.rounded(size);
+        a + d + g
+    }
+
+    /// Its ascent, descent and line gap at `size` pixels, each rounded to a whole pixel (as Chrome's font metrics are).
+    pub fn rounded(self, size: f32) -> (f32, f32, f32) {
+        let (a, d, g) = WEB_METRICS[self as usize];
+        let px = |units: i32| libm_round(units as f32 * size / 2048.0);
+        (px(a), px(d), px(g))
+    }
+}
+
+/// Rounds halves away from zero (f32::round isn't in core).
+fn libm_round(x: f32) -> f32 {
+    let t = x as i64 as f32;
+    let f = x - t;
+    if f >= 0.5 {
+        t + 1.0
+    } else if f <= -0.5 {
+        t - 1.0
+    } else {
+        t
+    }
+}
 
 /// Some letters reach a little past their own width (an italic f, an accent); the drawn line keeps
 /// this much room on each side, in pixels.
@@ -57,17 +113,46 @@ pub enum Face {
     SansBold,
     SansItalic,
     SansBoldItalic,
+    /// A web page's: its family, and whether it's bold and italic (each a font of its own, or an instance of one).
+    Web(Family, bool, bool),
 }
 
 impl Face {
     fn bold(self) -> bool {
-        matches!(self, Face::Bold | Face::BoldItalic | Face::SansBold | Face::SansBoldItalic)
+        matches!(self, Face::Bold | Face::BoldItalic | Face::SansBold | Face::SansBoldItalic | Face::Web(_, true, _))
     }
+    /// Leaned by the engine (a font without its italic): never a web face, whose italics are fonts of their own.
     fn slanted(self) -> bool {
         matches!(self, Face::Italic | Face::BoldItalic | Face::SansItalic | Face::SansBoldItalic)
     }
     fn sans(self) -> bool {
         matches!(self, Face::Sans | Face::SansBold | Face::SansItalic | Face::SansBoldItalic)
+    }
+
+    /// A number for each face (for keeping what's been drawn or measured in each).
+    pub fn key(self) -> u8 {
+        match self {
+            Face::Regular => 0,
+            Face::Bold => 1,
+            Face::Italic => 2,
+            Face::BoldItalic => 3,
+            Face::Mono => 4,
+            Face::Sans => 5,
+            Face::SansBold => 6,
+            Face::SansItalic => 7,
+            Face::SansBoldItalic => 8,
+            Face::Web(f, bold, italic) => 9 + (f as u8) * 4 + bold as u8 + 2 * italic as u8,
+        }
+    }
+
+    /// Which of the web fonts a web face is drawn in, and whether in its bold instance (a variable font's).
+    fn web(self) -> Option<(usize, bool)> {
+        let Face::Web(family, bold, italic) = self else { return None };
+        Some(match family {
+            Family::Serif => (bold as usize + 2 * italic as usize, false),
+            Family::Sans => (4 + italic as usize, bold),
+            Family::Mono => (6 + bold as usize + 2 * italic as usize, false),
+        })
     }
 }
 
@@ -143,6 +228,8 @@ enum Source {
     FallbackMono,
     /// Chinese, Japanese and Korean (in their regular weight only too).
     Cjk,
+    /// One of the web fonts (by its place in WEB).
+    Web(u8),
 }
 
 /// Characters that show nothing and take no room: joiners and zero-width spaces, variation selectors (the "as an
@@ -226,6 +313,35 @@ pub struct Type {
     sans_bold_kerning: Kerning<'static>,
     sans_marks: Marks<'static>,
     sans_bold_marks: Marks<'static>,
+    /// The web fonts (as WEB has them).
+    web: Vec<WebFont>,
+}
+
+/// One of web pages' fonts: the font, its bold instance if it's variable (with every glyph's advance in it), and its
+/// kerning and mark positioning, at its default and at its bold.
+struct WebFont {
+    font: Font<'static>,
+    bold: Option<Instance>,
+    bold_advances: Vec<u16>,
+    kerning: Kerning<'static>,
+    bold_kerning: Kerning<'static>,
+    marks: Marks<'static>,
+    bold_marks: Marks<'static>,
+}
+
+impl WebFont {
+    fn new(data: &'static [u8], upem: u16) -> WebFont {
+        let font = Font::parse(data).expect("a built-in web font is damaged");
+        assert!(font.metrics.units_per_em == upem, "a web font's size differs");
+        let bold = font.instance(b"wght", 700);
+        let bold_advances = match &bold {
+            Some(at) => font.advances_at(at, 0..font.glyph_count()),
+            None => Vec::new(),
+        };
+        let (kerning, bold_kerning) = (font.kerning(None), font.kerning(bold.as_ref()));
+        let (marks, bold_marks) = (font.marks(None), font.marks(bold.as_ref()));
+        WebFont { font, bold, bold_advances, kerning, bold_kerning, marks, bold_marks }
+    }
 }
 
 /// How a character is set on a line: where the pen is at it (font units from the line's start, kerned with the
@@ -329,6 +445,7 @@ impl Type {
         };
         let (sans_kerning, sans_bold_kerning) = (sans.kerning(None), sans.kerning(sans_bold.as_ref()));
         let (sans_marks, sans_bold_marks) = (sans.marks(None), sans.marks(sans_bold.as_ref()));
+        let web = WEB.iter().map(|&data| WebFont::new(data, upem)).collect();
         Type {
             font,
             mono,
@@ -348,6 +465,7 @@ impl Type {
             sans_bold_kerning,
             sans_marks,
             sans_bold_marks,
+            web,
         }
     }
 
@@ -363,12 +481,55 @@ impl Type {
             Source::Fallback => &self.fallback,
             Source::FallbackMono => &self.fallback_mono,
             Source::Cjk => &self.cjk,
+            Source::Web(i) => &self.web[i as usize].font,
         }
+    }
+
+    /// The variable instance a glyph from `source` is drawn at in `face` (its bold), if there's one.
+    fn instance_of(&self, source: Source, face: Face) -> Option<&Instance> {
+        if !face.bold() {
+            return None;
+        }
+        match source {
+            Source::Text => self.bold.as_ref(),
+            Source::Sans => self.sans_bold.as_ref(),
+            Source::Web(i) => self.web[i as usize].bold.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Whether a glyph from `source` in `face` is drawn twice, a little apart, to make it bold: a bold face's, from a
+    /// font with no bold of its own (a fallback).
+    fn made_bold(&self, source: Source, face: Face) -> bool {
+        face.bold()
+            && match source {
+                Source::Text => self.bold.is_none(),
+                Source::Sans => self.sans_bold.is_none(),
+                // (A web face's bold is a font of its own, or an instance of its variable one.)
+                Source::Web(_) => false,
+                _ => true,
+            }
     }
 
     /// Where a character's glyph is for `face`: in the face's own font, else in a fallback font; else the face's own
     /// "missing" glyph (a box), for characters none has.
     fn glyph(&self, c: char, face: Face) -> (Source, u16) {
+        // A web face: its own font, then the fallbacks (the code font's first, for monospace), then the text font's.
+        if let Some((i, _)) = face.web() {
+            let own = Source::Web(i as u8);
+            let order = if matches!(face, Face::Web(Family::Mono, ..)) {
+                [own, Source::FallbackMono, Source::Fallback, Source::Text, Source::Cjk]
+            } else {
+                [own, Source::Fallback, Source::Text, Source::FallbackMono, Source::Cjk]
+            };
+            for source in order {
+                let glyph = self.font_of(source).glyph_index(c);
+                if glyph != 0 {
+                    return (source, glyph);
+                }
+            }
+            return (own, 0);
+        }
         // (The sans-serif font has fewer letters than the text font: the fallbacks have only what the text font
         // lacks, so the text font's come before them.)
         let order: &[Source] = if face == Face::Mono {
@@ -402,6 +563,10 @@ impl Type {
                 Some(&a) if face.bold() => a,
                 _ => self.sans.advance(glyph),
             },
+            Source::Web(i) => match self.web[i as usize].bold_advances.get(glyph as usize) {
+                Some(&a) if face.bold() => a,
+                _ => self.web[i as usize].font.advance(glyph),
+            },
             _ => self.font_of(source).advance(glyph),
         };
         Some(Set { source, glyph, face, advance: advance as i32 })
@@ -418,6 +583,10 @@ impl Type {
             (Source::Text, false) => self.kerning.pair(a.glyph, b.glyph),
             (Source::Sans, true) => self.sans_bold_kerning.pair(a.glyph, b.glyph),
             (Source::Sans, false) => self.sans_kerning.pair(a.glyph, b.glyph),
+            (Source::Web(i), bold) => {
+                let w = &self.web[i as usize];
+                if bold && w.bold.is_some() { w.bold_kerning.pair(a.glyph, b.glyph) } else { w.kerning.pair(a.glyph, b.glyph) }
+            }
             _ => 0,
         }
     }
@@ -430,6 +599,10 @@ impl Type {
             Source::Text => Some(&self.marks),
             Source::Sans if face.bold() => Some(&self.sans_bold_marks),
             Source::Sans => Some(&self.sans_marks),
+            Source::Web(i) => {
+                let w = &self.web[i as usize];
+                Some(if face.bold() && w.bold.is_some() { &w.bold_marks } else { &w.marks })
+            }
             _ => None,
         }
     }
@@ -696,6 +869,18 @@ impl Type {
         (style.line_height - content) / 2 + self.scale(m.ascender as i32, style.size)
     }
 
+    /// Where the baseline is in `face`, below the top of a line box in `style`, in 1/256 pixel. A web face's as Chrome
+    /// puts it: its font's ascent and descent (rounded to whole pixels) in the middle of the line, the leading left
+    /// over shared out above and below, the odd pixel below.
+    pub fn baseline_in(&self, face: Face, style: Style) -> i32 {
+        let Face::Web(family, ..) = face else { return self.baseline(style) };
+        let (a, d, _) = family.rounded(style.size as f32 / ONE as f32);
+        let (a, d) = (a as i32 * ONE, d as i32 * ONE);
+        // Half the leading above, in whole pixels rounded down (Chrome's floor, a negative leading's too).
+        let leading = style.line_height - (a + d);
+        leading.div_euclid(2 * ONE) * ONE + a
+    }
+
     /// Splits `text` into lines no wider than `max`, breaking at spaces.
     #[allow(dead_code)]
     pub fn wrap<'t>(&self, text: &'t str, size: i32, max: i32) -> Vec<&'t str> {
@@ -738,14 +923,10 @@ impl Type {
         let width = placed.last().map_or(0, |p| p.pen + p.advance);
         for (units, up, s) in placed.into_iter().filter_map(|p| p.drawn.map(|(s, x, y)| (x, y, s))) {
             let font = self.font_of(s.source);
-            let bold = match s.source {
-                Source::Text => self.bold.as_ref(),
-                Source::Sans => self.sans_bold.as_ref(),
-                _ => None,
-            };
+            let bold = self.instance_of(s.source, face);
             let mut shifted = Shift { to: out, dx: units * 64, dy: up * 64 };
             let draw = |o: &mut dyn Outline| match bold {
-                Some(at) if face.bold() => font.outline_at(s.glyph, at, o),
+                Some(at) => font.outline_at(s.glyph, at, o),
                 _ => font.outline(s.glyph, o),
             };
             if face.slanted() {
@@ -764,7 +945,7 @@ impl Type {
     }
 
     /// Draws one line of text in `face`. (All of them sit on the text font's baseline: the code font has the same
-    /// ascender and descender.)
+    /// ascender and descender. A web face's on its own: `baseline_in`.)
     pub fn ink_in(&self, text: &str, face: Face, style: Style, top: i32) -> Ink {
         let m = self.font.metrics;
         let width = (self.width_in(text, face, style.size) + ONE - 1) / ONE;
@@ -774,24 +955,24 @@ impl Type {
         let h = ((top + style.line_height + ONE - 1) / ONE) as usize;
         // The font's own height (ascender to descender), centred in the line box, as CSS does.
         let content = self.scale(m.ascender as i32 - m.descender as i32, style.size);
-        let baseline = top + (style.line_height - content) / 2 + self.scale(m.ascender as i32, style.size);
+        let baseline = top
+            + match face {
+                Face::Web(..) => self.baseline_in(face, style),
+                _ => (style.line_height - content) / 2 + self.scale(m.ascender as i32, style.size),
+            };
         let mut raster = Raster::new(w, h);
         let mut pen = Pen::new(&mut raster, style.size, m.units_per_em);
         pen.y = baseline;
         let apart = made_up_bold(style.size);
         for (units, up, s) in self.line(text, face) {
             let font = self.font_of(s.source);
-            let bold = match s.source {
-                Source::Text => self.bold.as_ref(),
-                Source::Sans => self.sans_bold.as_ref(),
-                _ => None,
-            };
+            let bold = self.instance_of(s.source, face);
             let draw = |out: &mut dyn Outline| match bold {
-                Some(at) if face.bold() => font.outline_at(s.glyph, at, out),
+                Some(at) => font.outline_at(s.glyph, at, out),
                 _ => font.outline(s.glyph, out),
             };
             // (In bold, a fallback font's glyph drawn twice, a little apart, as browsers make a bold up: it has none.)
-            let strikes: &[i32] = if face.bold() && bold.is_none() { &[0, apart] } else { &[0] };
+            let strikes: &[i32] = if self.made_bold(s.source, face) { &[0, apart] } else { &[0] };
             for &dx in strikes {
                 pen.x = PAD as i32 * ONE + self.scale(units, style.size) + dx;
                 pen.y = baseline - self.scale(up, style.size);

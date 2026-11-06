@@ -3,6 +3,9 @@ Copyright 2022 The Noto Project Authors (https://github.com/notofonts/math)
 Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)
 Copyright 2013 Google LLC
 Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+Copyright 2020 The Arimo Project Authors (https://github.com/googlefonts/arimo)
+Copyright 2026 The Tinos Project Authors (https://github.com/googlefonts/tinos)
+Copyright 2026 The Cousine Project Authors (https://github.com/googlefonts/cousine)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

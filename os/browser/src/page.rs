@@ -160,9 +160,9 @@ pub struct Page {
     dpr: f32,
     /// The modules being fetched for its scripts: their resources, and their keys in the module loader's map.
     module_keys: Vec<(usize, String)>,
-    /// Its <svg> elements' pictures: (element, its text's hash, the resource, and the colour it was given for
-    /// currentColor).
-    inline_svgs: Vec<(NodeId, u64, usize, Option<u32>)>,
+    /// Its <svg> elements' pictures: (element, its text's hash, the resource, and what the page's style sheets gave
+    /// it (svg_look's, hashed): the colour for currentColor, and its fills and strokes).
+    inline_svgs: Vec<(NodeId, u64, usize, u64)>,
     /// Its <canvas> elements' pictures (their pixels are its scripts'): (element, resource).
     canvases: Vec<(NodeId, usize)>,
     /// Pictures written into it (data: addresses), by their address's hash: their resources.
@@ -394,14 +394,16 @@ impl Page {
                     if inside || self.picture_of.len() >= MOST_PICTURES {
                         continue;
                     }
-                    let mut text = self.doc.outer_html(n);
+                    // (Its fills and strokes as the page's style sheets give them, where they say other than its text.)
+                    let (color, paints) = self.svg_look(n);
+                    let mut text = self.doc.outer_html_setting(n, &|m| paints.iter().filter(|p| p.0 == m).map(|p| (p.1, p.2.clone())).collect());
                     // (currentColor: the colour the page gives the element, unless it says its own.)
-                    let color = self.color_of(n);
                     if !e.has_attr("color")
                         && let Some(c) = color
                     {
                         text = format!("<svg color=\"#{c:06x}\"{}", &text[4..]);
                     }
+                    let look = look_hash(color, &paints);
                     let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
                     let r = match self.inline_svgs.iter().find(|(k, h, _, _)| *k == n && *h == hash) {
                         Some((_, _, r, _)) => *r,
@@ -418,7 +420,7 @@ impl Page {
                                 self.resources[*old].inline = None;
                             }
                             self.inline_svgs.retain(|(k, _, _, _)| *k != n);
-                            self.inline_svgs.push((n, hash, r, color));
+                            self.inline_svgs.push((n, hash, r, look));
                             r
                         }
                     };
@@ -594,8 +596,11 @@ impl Page {
             if self.styles.is_none() {
                 self.parse_sheets(view);
                 self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author }, view, dpr)));
-                // (An <svg> made before the colour it's drawn in was known: made again.)
-                if self.inline_svgs.iter().any(|(n, _, _, c)| self.color_of(*n) != *c) {
+                // (An <svg> made before the colours it's drawn in were known: made again.)
+                if self.inline_svgs.iter().any(|(n, _, _, look)| {
+                    let (color, paints) = self.svg_look(*n);
+                    look_hash(color, &paints) != *look
+                }) {
                     self.scan();
                     self.sheets_stale = false;
                 }
@@ -775,6 +780,28 @@ impl Page {
         self.styles.as_ref().and_then(|st| st.of.get(n).cloned().flatten()).map(|st| st.color & 0x00FF_FFFF)
     }
 
+    /// What the page's style sheets say an <svg> is drawn with, beyond its own text: currentColor's colour, and the
+    /// fills and strokes they give it (or it inherits from the page round it, where it says none of its own) and the
+    /// elements inside it (each element's, as an attribute to set on it).
+    fn svg_look(&self, n: NodeId) -> (Option<u32>, Vec<(NodeId, &'static str, String)>) {
+        let color = self.color_of(n);
+        let mut paints = Vec::new();
+        let Some(styles) = self.styles.as_ref() else { return (color, paints) };
+        let style = |m: NodeId| styles.of.get(m).cloned().flatten();
+        for m in self.doc.descendants(n) {
+            let (Some(e), Some(s)) = (self.doc.element(m), style(m)) else { continue };
+            let parent = self.doc.parent(m).and_then(style);
+            for (name, mine, theirs) in [("fill", s.fill, parent.as_ref().and_then(|p| p.fill)), ("stroke", s.stroke, parent.as_ref().and_then(|p| p.stroke))] {
+                let Some(mine) = mine else { continue };
+                // (Said for this element itself, or, on the <svg>, inherited from round it with nothing of its own.)
+                if Some(mine) != theirs || (m == n && !e.has_attr(name)) {
+                    paints.push((m, name, mine.svg()));
+                }
+            }
+        }
+        (color, paints)
+    }
+
     /// The modules the module loader wants fetched, asked for.
     fn modules_wanted(&mut self) {
         let Some(s) = self.script.as_mut() else { return };
@@ -875,6 +902,11 @@ impl Page {
 
     /// Moves the page's scripts on (from the system's loop, `now` ms since the page began): the scripts that have
     /// come run in their turn, DOMContentLoaded and load fired, timers and tasks due run. True if anything ran.
+    /// Runs `source` as a classic script in the page, what it logs going to the console (for tools and tests).
+    pub fn run_text(&mut self, source: &str) {
+        self.with_script(|s| s.run(source, "eval", None));
+    }
+
     pub fn run(&mut self, now: f64) -> bool {
         if self.script.is_none() {
             return false;
@@ -1662,6 +1694,7 @@ pub fn bounds(i: &Item) -> Rect {
             Rect::new(*x, *y, *w, *h)
         }
         Paint::Text { x, y, w, line, .. } => Rect::new(*x, *y, *w, *line),
+        Paint::Shadow { x, y, w, h, .. } => Rect::new(*x, *y, *w, *h),
     }
 }
 
@@ -1735,6 +1768,22 @@ fn picture_address(src: Option<&str>, srcset: Option<&str>, data_src: Option<&st
 
 /// A data: URL's bytes (base64 or percent-encoded).
 /// HTML's rules for a non-negative integer (a canvas's width and height).
+/// What svg_look found, hashed (to tell when it's changed).
+fn look_hash(color: Option<u32>, paints: &[(NodeId, &'static str, String)]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    let mut eat = |b: u8| h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+    for b in color.map_or(u64::MAX, u64::from).to_le_bytes() {
+        eat(b);
+    }
+    for (n, name, value) in paints {
+        for b in (*n as u64).to_le_bytes().into_iter().chain(name.bytes()).chain(value.bytes()) {
+            eat(b);
+        }
+        eat(0);
+    }
+    h
+}
+
 fn non_negative(s: &str) -> Option<u32> {
     let s = s.trim_start_matches([' ', '\t', '\n', '\x0c', '\r']);
     let s = s.strip_prefix('+').unwrap_or(s);

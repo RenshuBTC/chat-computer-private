@@ -18,6 +18,8 @@ pub struct Document {
     pub version: u64,
     /// Shadow roots: (their host element, the fragment holding the shadow tree).
     pub shadows: Vec<(NodeId, NodeId)>,
+    /// The popovers showing (showPopover), which :popover-open matches: the others aren't shown.
+    pub popovers: Vec<NodeId>,
 }
 
 pub struct Node {
@@ -78,7 +80,14 @@ impl Element {
 
 impl Document {
     pub fn new() -> Document {
-        Document { nodes: alloc::vec![Node { parent: None, children: Vec::new(), data: Data::Document }], quirks: true, templates: Vec::new(), version: 0, shadows: Vec::new() }
+        Document {
+            nodes: alloc::vec![Node { parent: None, children: Vec::new(), data: Data::Document }],
+            quirks: true,
+            templates: Vec::new(),
+            version: 0,
+            shadows: Vec::new(),
+            popovers: Vec::new(),
+        }
     }
 
     pub fn element(&self, id: NodeId) -> Option<&Element> {
@@ -288,18 +297,26 @@ impl Document {
     /// The node as HTML (an element with what's inside it, as `outerHTML` gives it).
     pub fn outer_html(&self, id: NodeId) -> String {
         let mut out = String::new();
-        self.serialize(id, &mut out, true);
+        self.serialize(id, &mut out, true, &|_| Vec::new());
+        out
+    }
+
+    /// The node and what's inside it, as HTML, with attributes set on its elements (in place of any of theirs of the
+    /// same name) as `set` says for each.
+    pub fn outer_html_setting(&self, id: NodeId, set: &dyn Fn(NodeId) -> Vec<(&'static str, String)>) -> String {
+        let mut out = String::new();
+        self.serialize(id, &mut out, true, set);
         out
     }
 
     /// What's inside the node, as HTML (`innerHTML`).
     pub fn inner_html(&self, id: NodeId) -> String {
         let mut out = String::new();
-        self.serialize(id, &mut out, false);
+        self.serialize(id, &mut out, false, &|_| Vec::new());
         out
     }
 
-    fn serialize(&self, id: NodeId, out: &mut String, with_self: bool) {
+    fn serialize(&self, id: NodeId, out: &mut String, with_self: bool, set: &dyn Fn(NodeId) -> Vec<(&'static str, String)>) {
         // (Without recursion: what's left to write, a node to open or an end tag to close.)
         enum Step {
             Open(NodeId),
@@ -343,7 +360,18 @@ impl Document {
                     Data::Element(e) => {
                         out.push('<');
                         out.push_str(&e.name);
+                        let setting = set(n);
                         for (k, v) in &e.attrs {
+                            if setting.iter().any(|(name, _)| name == k) {
+                                continue;
+                            }
+                            out.push(' ');
+                            out.push_str(k);
+                            out.push_str("=\"");
+                            escape_into(out, v, true);
+                            out.push('"');
+                        }
+                        for (k, v) in &setting {
                             out.push(' ');
                             out.push_str(k);
                             out.push_str("=\"");

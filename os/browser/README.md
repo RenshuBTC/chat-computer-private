@@ -55,3 +55,11 @@ authorization of the copyright holder.
 The metrics of Chrome's default fonts in `../text` (Times New Roman's, Arial's and Courier New's ascent, descent,
 x-height, cap height and the width of their "0") are measurements of how Chrome lays text out, taken from Chrome
 itself; the fonts drawn are their metric twins in `../fonts`.
+
+The counter styles in `src/counter_style.rs` are the ones CSS Counter Styles predefines (decimal, the Roman, Greek,
+Armenian, Georgian and Hebrew numbers, the Indic and other digits, the Chinese, Japanese, Korean and Ethiopic numbers,
+and the rest), each written as Chrome writes it: checked against the list markers Chromium itself draws (read from its
+accessibility tree) for a range of values, small, large, zero and negative. The quotes each language takes for
+`quotes: auto` (`src/counters.rs`) are those Chrome uses, read the same way. Where Chrome draws a list's discs,
+circles, squares, disclosure triangles and pictures, and where it puts tab stops and text decorations, are
+measurements of Chromium's own drawing.

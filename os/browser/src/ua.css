@@ -88,6 +88,9 @@ iframe { border: 2px inset; }
 video, audio, canvas { display: inline-block; }
 img, svg, video, canvas, iframe, embed, object { overflow: clip; }
 summary { display: block; }
+bdi, output, [dir] { unicode-bidi: isolate; }
+details > summary:first-of-type { display: list-item; counter-increment: list-item 0; list-style: disclosure-closed inside; }
+details[open] > summary:first-of-type { list-style-type: disclosure-open; }
 dialog[open] { display: block; position: absolute; left: 0; right: 0; margin: auto; border: solid; padding: 1em;
   background-color: Canvas; color: CanvasText; width: fit-content; }
 /* A popover isn't shown until a script shows it (showPopover); then it's over the page, in the middle of the window. */

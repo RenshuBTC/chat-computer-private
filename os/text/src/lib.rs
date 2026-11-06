@@ -1081,6 +1081,12 @@ impl Type {
     /// Draws one line of text in `face`. (All of them sit on the text font's baseline: the code font has the same
     /// ascender and descender. A web face's on its own: `baseline_in`.)
     pub fn ink_in(&self, text: &str, face: Face, style: Style, top: i32) -> Ink {
+        self.ink_at(text, face, style, top, 0)
+    }
+
+    /// As `ink_in`, the line starting `left` (in 1/256 pixel, under a pixel) right of the ink's own left: its glyphs
+    /// drawn where a fraction of a pixel puts them, as Chrome places text a quarter of a pixel at a time.
+    pub fn ink_at(&self, text: &str, face: Face, style: Style, top: i32, left: i32) -> Ink {
         let m = self.font.metrics;
         let width = (self.width_in(text, face, style.size) + ONE - 1) / ONE;
         // (A slanted line's tops lean past its last letter: about a fifth of the size.)
@@ -1103,7 +1109,7 @@ impl Type {
             // (In bold, a fallback font's glyph drawn twice, a little apart, as browsers make a bold up: it has none.)
             let strikes: &[i32] = if self.made_bold(s.source, face) { &[0, apart] } else { &[0] };
             for &dx in strikes {
-                pen.x = PAD as i32 * ONE + self.scale(units, style.size) + dx;
+                pen.x = PAD as i32 * ONE + left + self.scale(units, style.size) + dx;
                 pen.y = baseline - self.scale(up, style.size);
                 if face.slanted() {
                     draw(&mut Slant { to: &mut pen });

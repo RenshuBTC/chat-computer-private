@@ -146,17 +146,41 @@ pub enum VAlign {
     Len(f32),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// list-style-type: no marker, a counter style's (by name: CSS's predefined ones in lower case), or a string.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ListStyle {
     None,
-    Disc,
-    Circle,
-    Square,
-    Decimal,
-    LowerAlpha,
-    UpperAlpha,
-    LowerRoman,
-    UpperRoman,
+    Named(Arc<str>),
+    Text(Arc<str>),
+}
+
+impl ListStyle {
+    pub fn named(name: &str) -> ListStyle {
+        ListStyle::Named(Arc::from(name))
+    }
+}
+
+/// What ::before's and ::after's content is made of.
+#[derive(Clone, PartialEq, Debug)]
+pub enum ContentPart {
+    /// Words: a string, or an attribute's value (attr()).
+    Text(String),
+    /// counter() (no `between`) or counters(): a counter's value, or all its values in scope with `between` between
+    /// them, written in a counter style (None: none, nothing written).
+    Counter { name: String, between: Option<String>, style: Option<Arc<str>> },
+    OpenQuote,
+    CloseQuote,
+    NoOpenQuote,
+    NoCloseQuote,
+    /// A picture (url()).
+    Image(String),
+}
+
+/// One counter counter-reset, counter-increment or counter-set names, and the value it gives it (or adds).
+#[derive(Clone, PartialEq, Debug)]
+pub struct CounterChange {
+    pub name: String,
+    pub value: i32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -296,6 +320,10 @@ pub struct Style {
     pub decoration_color: Option<Color>,
     pub transform_text: Transform,
     pub white_space: WhiteSpace,
+    /// tab-size: a tab's width, in spaces (or, `.1`, in pixels).
+    pub tab_size: (f32, bool),
+    /// unicode-bidi: isolate (or isolate-override, or plaintext): its text isn't shaped with the text round it.
+    pub bidi_isolate: bool,
     /// image-rendering: pixelated (or crisp-edges): its pictures made bigger pixel by pixel, not smoothly.
     pub pixelated: bool,
     /// text-overflow: ellipsis (a line too long for a box that clips it ends in "…").
@@ -308,7 +336,8 @@ pub struct Style {
     pub vertical_align: VAlign,
     pub list_style: ListStyle,
     pub list_inside: bool,
-    pub list_image: bool,
+    /// list-style-image's picture's address (as written; None: none).
+    pub list_image: Option<Arc<str>>,
     pub visible: bool,
     pub opacity: f32,
     pub clip: bool,
@@ -343,8 +372,16 @@ pub struct Style {
     pub grid_auto_columns: bool,
     pub border_collapse: bool,
     pub border_spacing: f32,
-    /// ::before's and ::after's content, as words.
-    pub content: Option<String>,
+    /// ::before's and ::after's content (None: none or normal, no box); and whether it's none (a ::marker's none: no
+    /// marker; its normal: the list's own).
+    pub content: Option<Arc<Vec<ContentPart>>>,
+    pub content_none: bool,
+    /// counter-reset, counter-increment and counter-set (None: none).
+    pub counter_reset: Option<Arc<Vec<CounterChange>>>,
+    pub counter_increment: Option<Arc<Vec<CounterChange>>>,
+    pub counter_set: Option<Arc<Vec<CounterChange>>>,
+    /// quotes: each level's opening and closing quote (None: auto, the language's; empty: none).
+    pub quotes: Option<Arc<Vec<(String, String)>>>,
     /// Its transform, when it only moves it: by how much (% of its own size). The layout moves it, with all that's
     /// in it.
     pub translate: (Len, Len),
@@ -731,15 +768,17 @@ impl Style {
             decoration_color: None,
             transform_text: Transform::None,
             white_space: WhiteSpace::Normal,
+            tab_size: (8.0, false),
+            bidi_isolate: false,
             ellipsis: false,
             pixelated: false,
             line_clamp: 0,
             webkit_box: false,
             box_vertical: false,
             vertical_align: VAlign::Baseline,
-            list_style: ListStyle::Disc,
+            list_style: ListStyle::named("disc"),
             list_inside: false,
-            list_image: false,
+            list_image: None,
             visible: true,
             opacity: 1.0,
             clip: false,
@@ -773,6 +812,11 @@ impl Style {
             border_collapse: false,
             border_spacing: 0.0,
             content: None,
+            content_none: false,
+            counter_reset: None,
+            counter_increment: None,
+            counter_set: None,
+            quotes: None,
             translate: (Len::ZERO, Len::ZERO),
             transform: None,
             transform_parts: [None; 3],
@@ -847,10 +891,12 @@ impl Style {
         s.text_indent = self.text_indent;
         s.transform_text = self.transform_text;
         s.white_space = self.white_space;
+        s.tab_size = self.tab_size;
         s.pixelated = self.pixelated;
-        s.list_style = self.list_style;
+        s.list_style = self.list_style.clone();
+        s.quotes = self.quotes.clone();
         s.list_inside = self.list_inside;
-        s.list_image = self.list_image;
+        s.list_image = self.list_image.clone();
         s.visible = self.visible;
         s.border_collapse = self.border_collapse;
         s.caption_bottom = self.caption_bottom;
@@ -889,6 +935,22 @@ impl Style {
         family_of(self.mono, self.sans)
     }
 
+    /// Its font's ascent in whole pixels, as Chrome rounds it (what its list markers' shapes are sized by).
+    pub fn ascent_px(&self) -> i32 {
+        self.ascent_descent().0 as i32
+    }
+
+    /// Its font's ascent and descent in whole pixels, as Chrome rounds them: an inline box's content area is from
+    /// the one above its baseline to the other below.
+    pub fn ascent_descent(&self) -> (f32, f32) {
+        let size = self.font_size;
+        let rounded = match self.web_face {
+            Some((id, ..)) => text::loaded::rounded(id, size).unwrap_or_else(|| self.family().rounded(size)),
+            None => self.family().rounded(size),
+        };
+        (rounded.0, rounded.1)
+    }
+
     pub fn is_positioned(&self) -> bool {
         self.position != Position::Static
     }
@@ -920,9 +982,13 @@ pub struct Styles {
     pub after: BTreeMap<NodeId, Arc<Style>>,
     /// Block containers' ::first-letter styles.
     pub first_letter: BTreeMap<NodeId, Arc<Style>>,
+    /// List items' ::marker styles (where a rule styles one).
+    pub marker: BTreeMap<NodeId, Arc<Style>>,
     /// The web fonts (by their place in Sheets' fonts) some element's words are to be set in: to be fetched, if they
     /// haven't been.
     pub wanted_fonts: alloc::collections::BTreeSet<usize>,
+    /// The page's counter styles (its @counter-style rules), by name.
+    pub counter_styles: crate::counter_style::Styles,
 }
 
 /// One selector of one rule, ready to match: which sheet and rule it's from, and its order in the cascade.
@@ -970,6 +1036,20 @@ pub struct ScriptedAnimation {
     pub progress: Option<f32>,
 }
 
+/// The counter styles a page's style sheets' @counter-style rules make, in order (a later rule of a name over an
+/// earlier one; one extending another taking it as it's been made so far).
+fn counter_styles(sheets: &[&Sheet]) -> crate::counter_style::Styles {
+    let mut out = crate::counter_style::Styles::new();
+    for sheet in sheets {
+        for (name, decls) in &sheet.counter_styles {
+            if let Some(cs) = crate::counter_style::from_rule(name, decls, &out) {
+                out.insert(name.clone(), Arc::new(cs));
+            }
+        }
+    }
+    out
+}
+
 pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Styles {
     let all: Vec<&Sheet> = core::iter::once(sheets.ua).chain(sheets.author.iter()).collect();
     let mut entries: Vec<Entry> = Vec::new();
@@ -1004,6 +1084,7 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
         }
     }
     let units_root = Units::new(16.0 * dpr, 16.0 * dpr, view.width * dpr, view.height * dpr, dpr);
+    let page_counter_styles = counter_styles(&all);
     let mut c = Cascade {
         doc,
         sheets: all,
@@ -1013,7 +1094,15 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
         dpr,
         rem: units_root.rem,
         root_font: text::Family::Serif.units(),
-        out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new(), first_letter: BTreeMap::new(), wanted_fonts: alloc::collections::BTreeSet::new() },
+        out: Styles {
+            of: vec![None; doc.nodes.len()],
+            before: BTreeMap::new(),
+            after: BTreeMap::new(),
+            first_letter: BTreeMap::new(),
+            marker: BTreeMap::new(),
+            wanted_fonts: alloc::collections::BTreeSet::new(),
+            counter_styles: page_counter_styles,
+        },
         fonts: sheets.fonts,
         now: sheets.now,
         scripted: sheets.scripted,
@@ -1282,9 +1371,12 @@ impl Cascade<'_> {
         self.with_font(&mut s);
         // ::before and ::after.
         let pseudo: Vec<usize> = self.index.pseudo.clone();
-        for which in [PseudoElement::Before, PseudoElement::After, PseudoElement::FirstLetter] {
-            // (::first-letter is a block container's.)
+        for which in [PseudoElement::Before, PseudoElement::After, PseudoElement::FirstLetter, PseudoElement::Marker] {
+            // (::first-letter is a block container's; ::marker a list item's.)
             if which == PseudoElement::FirstLetter && !matches!(s.display, Display::Block | Display::FlowRoot | Display::InlineBlock | Display::ListItem | Display::TableCell | Display::TableCaption) {
+                continue;
+            }
+            if which == PseudoElement::Marker && s.display != Display::ListItem {
                 continue;
             }
             let mut pf: Vec<(Rank, &Decl)> = Vec::new();
@@ -1306,6 +1398,18 @@ impl Cascade<'_> {
                 continue;
             }
             pf.sort_by(|a, b| a.0.cmp(&b.0));
+            if which == PseudoElement::Marker {
+                // (Only these apply to a marker: its font, colour, content and white-space, as CSS has it.)
+                pf.retain(|(_, d)| d.name.starts_with("font") || d.name.starts_with("--") || matches!(d.name.as_str(), "color" | "content" | "white-space" | "direction" | "unicode-bidi" | "text-transform" | "letter-spacing" | "word-spacing" | "line-height" | "tab-size" | "-moz-tab-size"));
+                // (A marker isn't transformed unless its own rule says so: Chrome's ::marker has text-transform:
+                // none.)
+                let mut li = s.clone();
+                li.transform_text = Transform::None;
+                let mut ms = self.apply_with(id, &li, &pf, true);
+                self.with_font(&mut ms);
+                self.out.marker.insert(id, Arc::new(ms));
+                continue;
+            }
             if which == PseudoElement::FirstLetter {
                 // (Inline, unless it floats; never positioned.)
                 let mut fl = self.apply_with(id, &s, &pf, true);
@@ -1409,15 +1513,9 @@ impl Cascade<'_> {
 
     fn apply_pseudo(&self, id: NodeId, parent: &Style, found: &[(Rank, &Decl)]) -> Option<Style> {
         let s = self.apply_with(id, parent, found, true);
-        let text = s.content.as_ref()?;
+        // (No content, none or normal: no box. Empty content is a box all the same: a clearfix's.)
+        s.content.as_ref()?;
         if s.display == Display::None {
-            return None;
-        }
-        // (Icon fonts' characters, which no font here has, and empty content that only draws a box with no size.)
-        let shown = text.chars().any(|c| !matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..=0x10FFFF));
-        let has_box = s.width.len().is_some() || s.height.len().is_some() || s.background != values::TRANSPARENT
-            || s.border_width.iter().any(|&w| w > 0.0);
-        if !shown && !has_box {
             return None;
         }
         Some(s)
@@ -1454,7 +1552,7 @@ impl Cascade<'_> {
             s.custom = Arc::new(map);
         }
         let is_root = self.doc.parent(id) == Some(0);
-        let mut ctx = Ctx { parent, units: Units::new(parent.font_size, self.rem, self.view.width * self.dpr, self.view.height * self.dpr, self.dpr) };
+        let mut ctx = Ctx { parent, units: Units::new(parent.font_size, self.rem, self.view.width * self.dpr, self.view.height * self.dpr, self.dpr), el: self.doc.element(id) };
         ctx.units.font = self.font_units(parent);
         ctx.units.root = self.root_font;
         // (Each property's winning value, for animations whose keyframes leave it out at their start or end.)
@@ -1711,18 +1809,27 @@ fn hints(doc: &Document, id: NodeId) -> Vec<Decl> {
             add("white-space", String::from("nowrap"));
         }
     }
-    if matches!(name, "ul" | "ol") && let Some(t) = el.attr("type") {
-        let ls = match t {
-            "1" => "decimal",
-            "a" => "lower-alpha",
-            "A" => "upper-alpha",
-            "i" => "lower-roman",
-            "I" => "upper-roman",
-            "circle" => "circle",
-            "square" => "square",
-            _ => "disc",
+    // (A list's or item's type: 1, a, A, i and I as written; disc, circle, square and none in any case.)
+    if matches!(name, "ul" | "ol" | "li")
+        && let Some(t) = el.attr("type")
+    {
+        let ls = match t.trim() {
+            "1" => Some("decimal"),
+            "a" => Some("lower-alpha"),
+            "A" => Some("upper-alpha"),
+            "i" => Some("lower-roman"),
+            "I" => Some("upper-roman"),
+            t => match t.to_ascii_lowercase().as_str() {
+                "none" => Some("none"),
+                "disc" => Some("disc"),
+                "circle" => Some("circle"),
+                "square" => Some("square"),
+                _ => None,
+            },
         };
-        add("list-style-type", String::from(ls));
+        if let Some(ls) = ls {
+            add("list-style-type", String::from(ls));
+        }
     }
     if name == "hr" && let Some(w) = el.attr("width").and_then(dim) {
         add("width", w);
@@ -2043,6 +2150,8 @@ fn pseudo(doc: &Document, sib: &SiblingInfo, id: NodeId, p: &Pseudo) -> bool {
 struct Ctx<'a> {
     parent: &'a Style,
     units: Units,
+    /// The element (a pseudo-element's own element), for attr().
+    el: Option<&'a crate::dom::Element>,
 }
 
 fn ident(v: &[Tok]) -> Option<String> {
@@ -2218,21 +2327,6 @@ fn display_value(i: &str) -> Option<Display> {
         "table-column" => Display::TableColumn,
         "table-column-group" => Display::TableColumnGroup,
         "table-caption" => Display::TableCaption,
-        _ => return None,
-    })
-}
-
-fn list_style(i: &str) -> Option<ListStyle> {
-    Some(match i {
-        "none" => ListStyle::None,
-        "disc" => ListStyle::Disc,
-        "circle" => ListStyle::Circle,
-        "square" => ListStyle::Square,
-        "decimal" | "decimal-leading-zero" | "arabic-indic" => ListStyle::Decimal,
-        "lower-alpha" | "lower-latin" => ListStyle::LowerAlpha,
-        "upper-alpha" | "upper-latin" => ListStyle::UpperAlpha,
-        "lower-roman" => ListStyle::LowerRoman,
-        "upper-roman" => ListStyle::UpperRoman,
         _ => return None,
     })
 }
@@ -2578,37 +2672,187 @@ fn tracks(v: &[Tok], c: &Ctx) -> Vec<Track> {
     out
 }
 
-fn content(v: &[Tok], el_attr: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let mut out = String::new();
-    let mut any = false;
-    for p in parts(v) {
-        match values::trim(p) {
-            [Tok::Str(s)] => {
-                out.push_str(s);
-                any = true;
-            }
-            [Tok::Ident(i)] => match i.to_ascii_lowercase().as_str() {
-                "none" | "normal" => return None,
-                "open-quote" => {
-                    out.push('“');
-                    any = true;
+/// content's value read: None when it's invalid (the declaration is dropped), Some(None) for none and normal. attr()
+/// is the element's attribute's value then and there.
+fn content(v: &[Tok], el: Option<&crate::dom::Element>) -> Option<Option<Arc<Vec<ContentPart>>>> {
+    let v = values::trim(v);
+    if let [Tok::Ident(i)] = v
+        && matches!(i.to_ascii_lowercase().as_str(), "none" | "normal")
+    {
+        return Some(None);
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < v.len() {
+        match &v[i] {
+            Tok::Ws => {}
+            Tok::Str(s) => out.push(ContentPart::Text(s.clone())),
+            Tok::Url(u) => out.push(ContentPart::Image(u.clone())),
+            Tok::Ident(w) => out.push(match w.to_ascii_lowercase().as_str() {
+                "open-quote" => ContentPart::OpenQuote,
+                "close-quote" => ContentPart::CloseQuote,
+                "no-open-quote" => ContentPart::NoOpenQuote,
+                "no-close-quote" => ContentPart::NoCloseQuote,
+                _ => return None,
+            }),
+            // (What follows is the content's alternative text, for speech.)
+            Tok::Delim('/') => break,
+            Tok::Function(f) => {
+                // Its arguments, to its closing parenthesis.
+                let mut depth = 1;
+                let mut j = i + 1;
+                while j < v.len() {
+                    match v[j] {
+                        Tok::Function(_) | Tok::OpenParen => depth += 1,
+                        Tok::CloseParen => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
                 }
-                "close-quote" => {
-                    out.push('”');
-                    any = true;
+                let args: Vec<&[Tok]> = css::split_commas(&v[i + 1..j.min(v.len())]).into_iter().map(values::trim).collect();
+                let name = |t: &[Tok]| if let [Tok::Ident(n)] = t { Some(n.clone()) } else { None };
+                match f.as_str() {
+                    "attr" => {
+                        // attr(name), its type (taken as a string) and a fallback.
+                        let first = args.first().copied().unwrap_or(&[]);
+                        let Some(Tok::Ident(a)) = first.first() else { return None };
+                        let fallback = args.get(1).and_then(|t| if let [Tok::Str(s)] = t { Some(s.clone()) } else { None });
+                        let value = el.and_then(|e| e.attr(&a.to_ascii_lowercase()).or_else(|| e.attr(a))).map(String::from);
+                        out.push(ContentPart::Text(value.or(fallback).unwrap_or_default()));
+                    }
+                    "counter" | "counters" => {
+                        let counters = f == "counters";
+                        let n = args.first().and_then(|t| name(t))?;
+                        let (between, rest) = if counters {
+                            let Some([Tok::Str(b)]) = args.get(1) else { return None };
+                            (Some(b.clone()), args.get(2))
+                        } else {
+                            (None, args.get(1))
+                        };
+                        if args.len() > if counters { 3 } else { 2 } {
+                            return None;
+                        }
+                        let style = match rest {
+                            None => Some(Arc::from("decimal")),
+                            Some(t) => {
+                                let st = name(t)?;
+                                if st.eq_ignore_ascii_case("none") { None } else { Some(Arc::from(st.as_str())) }
+                            }
+                        };
+                        out.push(ContentPart::Counter { name: n, between, style });
+                    }
+                    "url" => {
+                        let Some([Tok::Str(u)]) = args.first() else { return None };
+                        out.push(ContentPart::Image(u.clone()));
+                    }
+                    // (Gradients and image-set(): pictures drawn here only as url()s.)
+                    "linear-gradient" | "radial-gradient" | "conic-gradient" | "repeating-linear-gradient" | "repeating-radial-gradient"
+                    | "repeating-conic-gradient" | "image-set" | "-webkit-image-set" | "-webkit-linear-gradient" | "-webkit-radial-gradient" => {}
+                    _ => return None,
                 }
-                _ => {}
-            },
-            [Tok::Function(f), Tok::Ident(a), Tok::CloseParen] if f == "attr" => {
-                out.push_str(&el_attr(a).unwrap_or_default());
-                any = true;
+                i = j;
             }
-            [Tok::Function(_), ..] => any = true,
-            [Tok::Delim('/'), ..] => break,
-            _ => {}
+            _ => return None,
+        }
+        i += 1;
+    }
+    Some(Some(Arc::new(out)))
+}
+
+/// counter-reset's, counter-increment's or counter-set's value read (each name, then its integer, `default` if it has
+/// none): None when it's invalid, Some(None) for none. (reversed(), which Chrome doesn't take, is invalid.)
+fn counter_changes(v: &[Tok], default: i32) -> Option<Option<Arc<Vec<CounterChange>>>> {
+    let v = values::trim(v);
+    if let [Tok::Ident(i)] = v
+        && i.eq_ignore_ascii_case("none")
+    {
+        return Some(None);
+    }
+    let mut out: Vec<CounterChange> = Vec::new();
+    let mut valued = false;
+    for t in v {
+        match t {
+            Tok::Ws => {}
+            Tok::Ident(n) => {
+                if matches!(n.to_ascii_lowercase().as_str(), "none" | "initial" | "inherit" | "unset" | "default" | "revert" | "revert-layer") {
+                    return None;
+                }
+                out.push(CounterChange { name: n.clone(), value: default });
+                valued = false;
+            }
+            Tok::Number(x) => {
+                let last = out.last_mut()?;
+                if valued || (*x as i64) as f32 != *x {
+                    return None;
+                }
+                last.value = if *x >= i32::MAX as f32 { i32::MAX } else if *x <= i32::MIN as f32 { i32::MIN } else { *x as i32 };
+                valued = true;
+            }
+            _ => return None,
         }
     }
-    any.then_some(out)
+    if out.is_empty() {
+        return None;
+    }
+    Some(Some(Arc::new(out)))
+}
+
+/// quotes' value read: None when it's invalid; Some(None) for auto.
+fn quotes(v: &[Tok]) -> Option<Option<Arc<Vec<(String, String)>>>> {
+    let v = values::trim(v);
+    if let [Tok::Ident(i)] = v {
+        return match i.to_ascii_lowercase().as_str() {
+            "auto" => Some(None),
+            "none" => Some(Some(Arc::new(Vec::new()))),
+            _ => None,
+        };
+    }
+    let mut strings = Vec::new();
+    for t in v {
+        match t {
+            Tok::Ws => {}
+            Tok::Str(s) => strings.push(s.clone()),
+            _ => return None,
+        }
+    }
+    if strings.is_empty() || strings.len() % 2 != 0 {
+        return None;
+    }
+    Some(Some(Arc::new(strings.chunks(2).map(|p| (p[0].clone(), p[1].clone())).collect())))
+}
+
+/// list-style-image's value: its picture's address (url() or url("...")); None for none and the rest.
+fn list_image(v: &[Tok]) -> Option<Arc<str>> {
+    match values::trim(v) {
+        [Tok::Url(u)] => Some(Arc::from(u.as_str())),
+        [Tok::Function(f), Tok::Str(u), Tok::CloseParen] if f == "url" => Some(Arc::from(u.as_str())),
+        // (A gradient: a picture all the same, though not drawn here: no marker in its place.)
+        [Tok::Function(f), ..] if f.ends_with("gradient") => Some(Arc::from("")),
+        _ => None,
+    }
+}
+
+/// list-style-type's value: none, a counter style's name (CSS's own in lower case), or a string.
+fn list_style_type(t: &[Tok]) -> Option<ListStyle> {
+    match values::trim(t) {
+        [Tok::Ident(i)] => {
+            let lower = i.to_ascii_lowercase();
+            if lower == "none" {
+                return Some(ListStyle::None);
+            }
+            if matches!(lower.as_str(), "inherit" | "initial" | "unset" | "default" | "inside" | "outside") {
+                return None;
+            }
+            Some(if crate::counter_style::is_predefined(&lower) { ListStyle::named(&lower) } else { ListStyle::named(i) })
+        }
+        [Tok::Str(s)] => Some(ListStyle::Text(Arc::from(s.as_str()))),
+        _ => None,
+    }
 }
 
 /// One declaration on the style being worked out.
@@ -2623,7 +2867,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
             "initial" | "unset" | "revert" | "revert-layer" => {
                 let init = Style::initial(c.units.dpr);
-                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "visibility" | "list-style-type" | "text-transform" | "font-family" | "font" | "fill" | "stroke" | "image-rendering");
+                let inherited = matches!(name, "color" | "font-size" | "font-weight" | "font-style" | "line-height" | "text-align" | "white-space" | "tab-size" | "visibility" | "list-style-type" | "list-style" | "quotes" | "text-transform" | "font-family" | "font" | "fill" | "stroke" | "image-rendering");
                 if kw == "initial" || !inherited {
                     inherit_one(s, &init, name);
                 } else {
@@ -3289,6 +3533,17 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 };
             }
         }
+        "tab-size" | "-moz-tab-size" => match values::trim(v) {
+            [Tok::Number(n)] if *n >= 0.0 => s.tab_size = (*n, false),
+            t => {
+                if let Some(l) = values::length(t, units, 0.0)
+                    && !l.has_pct()
+                    && l.px >= 0.0
+                {
+                    s.tab_size = (l.px, true);
+                }
+            }
+        },
         "white-space" | "white-space-collapse" | "text-wrap-mode" | "text-wrap" => {
             let words: Vec<String> = parts(v).iter().filter_map(|x| ident(x)).collect();
             let has = |w: &str| words.iter().any(|x| x == w);
@@ -3354,29 +3609,43 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
         }
         "list-style-type" => {
-            if let Some(x) = ident(v).and_then(|i| list_style(&i)) {
+            if let Some(x) = list_style_type(v) {
                 s.list_style = x;
-            } else if let [Tok::Str(_)] = values::trim(v) {
-                s.list_style = ListStyle::None;
             }
         }
         "list-style-position" => s.list_inside = ident(v).as_deref() == Some("inside"),
         "list-style" => {
+            // (Its type, position and image in any order; none is the type's unless the image is given too.)
+            let mut nones = 0;
+            let (mut kind, mut inside, mut image) = (None, None, None);
             for t in parts(v) {
-                if let Some(i) = ident(t) {
-                    if i == "inside" {
-                        s.list_inside = true;
-                    } else if i == "outside" {
-                        s.list_inside = false;
-                    } else if let Some(x) = list_style(&i) {
-                        s.list_style = x;
+                match ident(t).as_deref() {
+                    Some("inside") => inside = Some(true),
+                    Some("outside") => inside = Some(false),
+                    Some("none") => nones += 1,
+                    _ => {
+                        if matches!(values::trim(t).first(), Some(Tok::Url(_) | Tok::Function(_))) {
+                            image = Some(list_image(t));
+                        } else if let Some(x) = list_style_type(t) {
+                            kind = Some(x);
+                        } else {
+                            return;
+                        }
                     }
-                } else if matches!(values::trim(t).first(), Some(Tok::Url(_))) {
-                    s.list_image = true;
                 }
             }
+            if nones > 0 && kind.is_none() {
+                kind = Some(ListStyle::None);
+                if nones > 1 || image.is_none() {
+                    image = Some(None);
+                }
+            }
+            s.list_style = kind.unwrap_or_else(|| ListStyle::named("disc"));
+            s.list_inside = inside.unwrap_or(false);
+            s.list_image = image.flatten();
         }
-        "list-style-image" => s.list_image = !matches!(ident(v).as_deref(), Some("none")),
+        "list-style-image" => s.list_image = list_image(v),
+        "unicode-bidi" => s.bidi_isolate = matches!(ident(v).as_deref(), Some("isolate" | "isolate-override" | "plaintext")),
         "visibility" => {
             if let Some(i) = ident(v) {
                 s.visible = i == "visible";
@@ -3696,7 +3965,25 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             }
         }
         "content" => {
-            s.content = content(v, |_| None);
+            if let Some(x) = content(v, c.el) {
+                s.content_none = x.is_none() && ident(v).as_deref() == Some("none");
+                s.content = x;
+            }
+        }
+        "counter-reset" | "counter-set" => {
+            if let Some(x) = counter_changes(v, 0) {
+                if name == "counter-reset" { s.counter_reset = x } else { s.counter_set = x }
+            }
+        }
+        "counter-increment" => {
+            if let Some(x) = counter_changes(v, 1) {
+                s.counter_increment = x;
+            }
+        }
+        "quotes" => {
+            if let Some(x) = quotes(v) {
+                s.quotes = x;
+            }
         }
         _ => {}
     }
@@ -3745,6 +4032,8 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "line-height" => s.line_height = from.line_height,
         "text-align" => s.text_align = from.text_align,
         "white-space" => s.white_space = from.white_space,
+        "tab-size" | "-moz-tab-size" => s.tab_size = from.tab_size,
+        "unicode-bidi" => s.bidi_isolate = from.bidi_isolate,
         "image-rendering" => s.pixelated = from.pixelated,
         "visibility" => s.visible = from.visible,
         "display" => s.display = from.display,
@@ -3810,7 +4099,16 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
             s.line_through = from.line_through;
             s.overline = from.overline;
         }
-        "list-style-type" | "list-style" => s.list_style = from.list_style,
+        "list-style-type" => s.list_style = from.list_style.clone(),
+        "list-style" => {
+            s.list_style = from.list_style.clone();
+            s.list_inside = from.list_inside;
+            s.list_image = from.list_image.clone();
+        }
+        "counter-reset" => s.counter_reset = from.counter_reset.clone(),
+        "counter-increment" => s.counter_increment = from.counter_increment.clone(),
+        "counter-set" => s.counter_set = from.counter_set.clone(),
+        "quotes" => s.quotes = from.quotes.clone(),
         "text-transform" => s.transform_text = from.transform_text,
         "overflow" => {
             s.clip = from.clip;
@@ -3825,7 +4123,10 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
         "scale" => s.transform_parts[2] = from.transform_parts[2],
         "border-radius" => s.radius = from.radius,
         "z-index" => s.z_index = from.z_index,
-        "content" => s.content = from.content.clone(),
+        "content" => {
+            s.content = from.content.clone();
+            s.content_none = from.content_none;
+        }
         "vertical-align" => s.vertical_align = from.vertical_align,
         "fill" => s.fill = from.fill,
         "stroke" => s.stroke = from.stroke,

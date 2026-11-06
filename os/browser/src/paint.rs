@@ -56,6 +56,8 @@ struct InkKey {
     face: u16,
     size: i32,
     line: i32,
+    /// The quarter of a pixel it starts at (0 to 3).
+    quarter: u8,
 }
 
 /// Draws pages, keeping their words' ink, and their pictures made the size they're drawn.
@@ -367,8 +369,12 @@ impl Painter {
                 }
             }
             Paint::Text { x, y, text, face, size, line, color, .. } => {
-                let ink = self.ink(ty, text, *face, m.len(*size), m.len(*line));
-                let (tx, ty_) = (num::round(m.x(*x)) as i32 - ink.left as i32, num::round(m.y(*y)) as i32);
+                // (Placed to a quarter of a pixel, as Chrome places text: the whole pixel here, the quarter in its ink.)
+                let quarters = num::floor(m.x(*x) * 4.0 + 0.5);
+                let whole = num::floor(quarters / 4.0);
+                let quarter = (quarters - whole * 4.0).clamp(0.0, 3.0) as u8;
+                let ink = self.ink(ty, text, *face, m.len(*size), m.len(*line), quarter);
+                let (tx, ty_) = (whole as i32 - ink.left as i32, num::round(m.y(*y)) as i32);
                 words(c, ink, tx, ty_, *color, clip);
             }
             Paint::Slice { x, y, w, h, image, whole, src, tile, step, repeat } => {
@@ -454,11 +460,11 @@ impl Painter {
         Some(px)
     }
 
-    fn ink(&mut self, ty: &Type, text: &str, face: Face, size: f32, line: f32) -> &Ink {
-        let key = InkKey { text: String::from(text), face: face.key(), size: (size * 256.0) as i32, line: (line * 256.0) as i32 };
+    fn ink(&mut self, ty: &Type, text: &str, face: Face, size: f32, line: f32, quarter: u8) -> &Ink {
+        let key = InkKey { text: String::from(text), face: face.key(), size: (size * 256.0) as i32, line: (line * 256.0) as i32, quarter };
         let round = self.round;
         if !self.inks.contains_key(&key) {
-            let ink = ty.ink_in(text, face, text::Style { size: key.size, line_height: key.line }, 0);
+            let ink = ty.ink_at(text, face, text::Style { size: key.size, line_height: key.line }, 0, quarter as i32 * 64);
             self.bytes += ink.coverage.len();
             self.inks.insert(key.clone(), (ink, round));
         }

@@ -4,8 +4,11 @@
 //! round the words and inline boxes that sit among blocks. A block inside an inline box (a link round a whole card)
 //! makes the inline box a block (CSS splits the inline box; the result looks the same in the common cases).
 
+use crate::counter_style;
+use crate::counters::{self, Counters, ListRole};
 use crate::dom::{Data, Document, NodeId};
-use crate::style::{Display, Float, Style, Styles, WhiteSpace};
+use crate::style::{ContentPart, Display, Float, ListStyle, Size, Style, Styles, WhiteSpace};
+use crate::values::Len;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -43,6 +46,20 @@ pub enum Content {
     Break,
 }
 
+/// A list item's marker: words ("1. ", or a string of the page's), or one of the shapes Chrome draws for disc,
+/// circle, square and the disclosure triangles.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Marker {
+    Text(String),
+    /// A picture (list-style-image): the page's resource.
+    Image(usize),
+    Disc,
+    Circle,
+    Square,
+    Open,
+    Closed,
+}
+
 pub struct LBox {
     /// The element (or the text node) it's made for; None for an anonymous box.
     pub node: Option<NodeId>,
@@ -69,6 +86,12 @@ pub struct LBox {
     /// Its size (CSS pixels) where it has none of its own and CSS gives none: a frame's and a video's 300 by 150, as
     /// Chrome makes them; nothing for a picture that hasn't come.
     pub default_size: (f32, f32),
+    /// A list item's marker, outside it (beside its first line).
+    pub marker: Option<Marker>,
+    /// An inside marker's own box: the shape it draws (Text for one of words or a picture).
+    pub marker_box: Option<Marker>,
+    /// An outside marker's ::marker style, if a rule gives it one (its font and colour).
+    pub marker_style: Option<Arc<Style>>,
 }
 
 impl LBox {
@@ -113,6 +136,10 @@ pub struct Tree {
 /// How a page's pictures are found: an element's picture's address, its place in the page's list.
 pub trait Pictures {
     fn picture(&mut self, doc: &Document, node: NodeId) -> Option<usize>;
+    /// A picture a style names (content: url()), by its address as written.
+    fn url(&self, _url: &str) -> Option<usize> {
+        None
+    }
     /// The density of the picture an element shows (its srcset's candidate's), if it isn't 1.
     fn density(&self, _node: NodeId) -> f32 {
         1.0
@@ -130,8 +157,12 @@ impl Tree {
             .unwrap_or_else(|| Arc::new(Style::initial(1.0)));
         let root = t.push(html, root_style, Content::Children, None);
         if let Some(h) = html {
-            let mut b = Builder { doc, styles, pictures, tree: &mut t, depth: 0 };
+            let mut b = Builder { doc, styles, pictures, tree: &mut t, depth: 0, counters: Counters::new(), ancestors: Vec::new() };
+            // (The root's own counters.)
+            let root_style = b.tree.boxes[root].style.clone();
+            let me = b.counters.enter(&root_style, Counters::role(doc, &[], Some(h), &root_style));
             b.children_of(h, root);
+            b.counters.leave(me);
         }
         // Overflow goes to the page's view: the root's, or, when the root's is visible, its <body>'s, which then
         // doesn't clip what's in it itself (CSS 2.1, 11.1.1: a body of no height with overflow-y: scroll, as
@@ -169,6 +200,9 @@ impl Tree {
             centered: false,
             frame: false,
             default_size: (0.0, 0.0),
+            marker: None,
+            marker_box: None,
+            marker_style: None,
         });
         if let Some(p) = parent {
             self.boxes[p].children.push(id);
@@ -227,6 +261,9 @@ impl Tree {
             centered: false,
             frame: false,
             default_size: (0.0, 0.0),
+            marker: None,
+            marker_box: None,
+            marker_style: None,
                     });
                     let kids: Vec<BoxId> = tree.boxes[a].children.clone();
                     for k in kids {
@@ -284,6 +321,9 @@ impl Tree {
             centered: false,
             frame: false,
             default_size: (0.0, 0.0),
+            marker: None,
+            marker_box: None,
+            marker_style: None,
                     });
                     let kids: Vec<BoxId> = tree.boxes[a].children.clone();
                     for k in kids {
@@ -336,12 +376,22 @@ impl Tree {
     }
 }
 
+/// A piece of a pseudo-element's content.
+enum Piece {
+    Text(String),
+    Image(String),
+}
+
 struct Builder<'a> {
     doc: &'a Document,
     styles: &'a Styles,
     pictures: &'a mut dyn Pictures,
     tree: &'a mut Tree,
     depth: u32,
+    counters: Counters,
+    /// The elements whose children are being made, outermost first (the flat tree's: a slot's assigned nodes are
+    /// its children).
+    ancestors: Vec<NodeId>,
 }
 
 impl Builder<'_> {
@@ -351,10 +401,17 @@ impl Builder<'_> {
             return;
         }
         self.depth += 1;
+        self.ancestors.push(node);
         if let Some(s) = self.styles.before.get(&node) {
             self.pseudo(s.clone(), node, parent);
         }
+        // (A closed <details> shows its first <summary> alone.)
+        let closed = self.doc.name(node) == "details" && self.doc.element(node).is_some_and(|e| !e.has_attr("open"));
+        let summary = closed.then(|| self.doc.children(node).iter().copied().find(|&c| self.doc.name(c) == "summary")).flatten();
         for c in self.flat_children(node) {
+            if closed && Some(c) != summary {
+                continue;
+            }
             match &self.doc.nodes[c].data {
                 Data::Text(t) => {
                     let style = self.tree.boxes[parent].style.clone();
@@ -368,7 +425,169 @@ impl Builder<'_> {
         if let Some(s) = self.styles.after.get(&node) {
             self.pseudo(s.clone(), node, parent);
         }
+        self.ancestors.pop();
         self.depth -= 1;
+    }
+
+    /// A pseudo-element's content as words alone (pictures left out).
+    fn content_text(&mut self, s: &Style, node: NodeId) -> String {
+        self.content_pieces(s, node).into_iter().filter_map(|p| if let Piece::Text(t) = p { Some(t) } else { None }).collect()
+    }
+
+    /// A pseudo-element's content: words (its strings and attributes, its counters' values, counter-reset,
+    /// counter-increment and counter-set of its own first, and its quotes, at their depth) and pictures.
+    fn content_pieces(&mut self, s: &Style, node: NodeId) -> Vec<Piece> {
+        let mut pieces = Vec::new();
+        let mut out = String::new();
+        let Some(parts) = s.content.clone() else { return pieces };
+        for p in parts.iter() {
+            match p {
+                ContentPart::Text(t) => out.push_str(t),
+                ContentPart::Counter { name, between, style } => {
+                    let values = match between {
+                        Some(_) => self.counters.values(name),
+                        None => alloc::vec![self.counters.value(name)],
+                    };
+                    if let Some(st) = style {
+                        let words: Vec<String> = values.iter().map(|&v| counter_style::represent(st, v as i64, &self.styles.counter_styles)).collect();
+                        out.push_str(&words.join(between.as_deref().unwrap_or("")));
+                    }
+                }
+                ContentPart::OpenQuote | ContentPart::CloseQuote => {
+                    let open = matches!(p, ContentPart::OpenQuote);
+                    if !open {
+                        if self.counters.quote_depth == 0 {
+                            continue;
+                        }
+                        self.counters.quote_depth -= 1;
+                    }
+                    let depth = self.counters.quote_depth;
+                    let q = match &s.quotes {
+                        Some(list) => list.get(depth.min(list.len().saturating_sub(1))).map(|(o, c)| if open { o.clone() } else { c.clone() }).unwrap_or_default(),
+                        None => {
+                            let pair = counters::language_quotes(&self.language(node))[depth.min(1)];
+                            String::from(if open { pair.0 } else { pair.1 })
+                        }
+                    };
+                    out.push_str(&q);
+                    if open {
+                        self.counters.quote_depth += 1;
+                    }
+                }
+                ContentPart::NoOpenQuote => self.counters.quote_depth += 1,
+                ContentPart::NoCloseQuote => self.counters.quote_depth = self.counters.quote_depth.saturating_sub(1),
+                ContentPart::Image(u) => {
+                    if !out.is_empty() {
+                        pieces.push(Piece::Text(core::mem::take(&mut out)));
+                    }
+                    pieces.push(Piece::Image(u.clone()));
+                }
+            }
+        }
+        if !out.is_empty() {
+            pieces.push(Piece::Text(out));
+        }
+        pieces
+    }
+
+    /// An element's language: its own lang attribute's, or its nearest ancestor's.
+    fn language(&self, node: NodeId) -> String {
+        let mut at = Some(node);
+        while let Some(n) = at {
+            if let Some(l) = self.doc.element(n).and_then(|e| e.attr("lang").or(e.attr("xml:lang"))) {
+                return String::from(l);
+            }
+            at = self.doc.parent(n);
+        }
+        String::new()
+    }
+
+    /// A list item's marker (an element's, or a ::before's or ::after's, `node` None), with its number, worked out for
+    /// every list item, shown or not, as each counts on its list; and its ::marker style, if a rule gives it one. Its
+    /// ::marker's content, if it has some, in place of the list's own (none: no marker).
+    fn list_marker(&mut self, node: Option<NodeId>, origin: NodeId, style: &Style) -> (Option<Marker>, Option<Arc<Style>>) {
+        let n = self.counters.number(self.doc, self.styles, &self.ancestors, node, style);
+        let ms = node.and_then(|k| self.styles.marker.get(&k).cloned());
+        if let Some(m) = &ms {
+            if m.content_none {
+                return (None, ms);
+            }
+            if m.content.is_some() {
+                let m = m.clone();
+                return (Some(Marker::Text(self.content_text(&m, origin))), ms);
+            }
+        }
+        // (A picture for a marker: drawn once it's come; nothing in its place till then, nor if it doesn't come, as
+        // Chrome has it.)
+        if let Some(u) = &style.list_image {
+            return (self.pictures.url(u).map(Marker::Image), ms);
+        }
+        let marker = match &style.list_style {
+            ListStyle::None => None,
+            ListStyle::Text(t) => Some(Marker::Text(String::from(&**t))),
+            ListStyle::Named(name) => Some(match &**name {
+                "disc" => Marker::Disc,
+                "circle" => Marker::Circle,
+                "square" => Marker::Square,
+                "disclosure-open" => Marker::Open,
+                "disclosure-closed" => Marker::Closed,
+                _ => Marker::Text(counter_style::marker(name, n as i64, &self.styles.counter_styles)),
+            }),
+        };
+        (marker, ms)
+    }
+
+    /// A list item's marker put where it goes: beside it (outside), or a box at the start of its first line.
+    fn place_marker(&mut self, b: BoxId, node: NodeId, marker: Option<Marker>, ms: Option<Arc<Style>>, walk: bool) {
+        let Some(m) = marker else { return };
+        let inside = self.tree.boxes[b].style.list_inside;
+        if inside && walk {
+            self.inside_marker(b, node, m, ms);
+        } else {
+            self.tree.boxes[b].marker = Some(m);
+            self.tree.boxes[b].marker_style = ms;
+        }
+    }
+
+    /// An inside marker: a box at the start of the item's first line. Words are an inline box of them (their spaces
+    /// kept, as ::marker's white-space: pre keeps them); a shape, a box as wide as Chrome makes its: the shape, a pixel
+    /// to either side of it, and an em after (a triangle and 0.4em after it), one pixel back to start.
+    fn inside_marker(&mut self, item: BoxId, node: NodeId, marker: Marker, ms: Option<Arc<Style>>) {
+        let li = ms.unwrap_or_else(|| {
+            let mut m = self.tree.boxes[item].style.inherit(1.0);
+            m.transform_text = crate::style::Transform::None;
+            Arc::new(m)
+        });
+        let mut s = li.inherit(1.0).with_display(Display::Inline);
+        s.white_space = WhiteSpace::Pre;
+        match marker {
+            // A picture: on the line, 7 pixels before the words.
+            Marker::Image(n) => {
+                s.margin = [Size::Len(Len::ZERO), Size::Len(Len::px(7.0)), Size::Len(Len::ZERO), Size::Len(Len::ZERO)];
+                let b = self.tree.push(Some(node), Arc::new(s), Content::Image { image: Some(n), alt: String::new(), density: 1.0 }, Some(item));
+                self.tree.boxes[b].marker_box = Some(Marker::Text(String::new()));
+            }
+            Marker::Text(t) => {
+                let s = Arc::new(s);
+                let b = self.tree.push(Some(node), s.clone(), Content::Children, Some(item));
+                self.tree.boxes[b].marker_box = Some(Marker::Text(String::new()));
+                self.tree.push(Some(node), Arc::new(s.inherit(1.0).with_display(Display::Inline)), Content::Text(t), Some(b));
+            }
+            shape => {
+                s.display = Display::InlineBlock;
+                let size = li.font_size;
+                let (w, before, after) = if matches!(shape, Marker::Open | Marker::Closed) {
+                    (crate::layout::disclosure_size(size), 0.0, size * 0.4)
+                } else {
+                    (crate::layout::bullet_size(li.ascent_px()) as f32 + 2.0, -1.0, size)
+                };
+                s.width = Size::Len(Len::px(w));
+                s.height = Size::Len(Len::ZERO);
+                s.margin = [Size::Len(Len::ZERO), Size::Len(Len::px(after)), Size::Len(Len::ZERO), Size::Len(Len::px(before))];
+                let b = self.tree.push(Some(node), Arc::new(s), Content::Children, Some(item));
+                self.tree.boxes[b].marker_box = Some(shape);
+            }
+        }
     }
 
     fn style_of(&self, node: NodeId) -> Option<Arc<Style>> {
@@ -392,10 +611,24 @@ impl Builder<'_> {
     }
 
     fn pseudo(&mut self, s: Arc<Style>, node: NodeId, parent: BoxId) {
-        let text = s.content.clone().unwrap_or_default();
+        let me = self.counters.enter(&s, ListRole::None);
+        let (marker, ms) = if s.display == Display::ListItem { self.list_marker(None, node, &s) } else { (None, None) };
+        let pieces = self.content_pieces(&s, node);
+        self.counters.leave(me);
         let b = self.tree.push(Some(node), s.clone(), Content::Children, Some(parent));
-        if !text.is_empty() {
-            self.tree.push(Some(node), Arc::new(s.inherit(1.0).with_display(Display::Inline)), Content::Text(text), Some(b));
+        self.place_marker(b, node, marker, ms, true);
+        let inner = Arc::new(s.inherit(1.0).with_display(Display::Inline));
+        for p in pieces {
+            match p {
+                Piece::Text(t) => {
+                    self.tree.push(Some(node), inner.clone(), Content::Text(t), Some(b));
+                }
+                // (A picture, url(): as an <img> would be, its own size.)
+                Piece::Image(u) => {
+                    let image = self.pictures.url(&u);
+                    self.tree.push(Some(node), inner.clone(), Content::Image { image, alt: String::new(), density: 1.0 }, Some(b));
+                }
+            }
         }
     }
 
@@ -405,7 +638,9 @@ impl Builder<'_> {
         match style.display {
             Display::None => return,
             Display::Contents => {
+                let me = self.counters.enter(&style, Counters::role(self.doc, &self.ancestors, Some(node), &style));
                 self.children_of(node, parent);
+                self.counters.leave(me);
                 return;
             }
             _ => {}
@@ -503,7 +738,11 @@ impl Builder<'_> {
             }
             _ => style,
         };
+        // Its counters, and (a list item) its number and marker.
+        let me = self.counters.enter(&style, Counters::role(self.doc, &self.ancestors, Some(node), &style));
+        let (marker, ms) = if style.display == Display::ListItem { self.list_marker(Some(node), node, &style) } else { (None, None) };
         let b = self.tree.push(Some(node), style, content, Some(parent));
+        self.place_marker(b, node, marker, ms, walk);
         self.tree.boxes[b].centered = name == "button";
         let frame = name == "iframe" || (matches!(name, "object" | "embed") && crate::page::embedded(el) == crate::page::Embedded::Document);
         self.tree.boxes[b].frame = frame;
@@ -516,6 +755,7 @@ impl Builder<'_> {
                 self.first_letter(b, fl);
             }
         }
+        self.counters.leave(me);
     }
 
     /// A block's ::first-letter: the first letter of its first line (in the boxes in it, in flow, ::before's too),
@@ -525,7 +765,8 @@ impl Builder<'_> {
         let mut stack: Vec<BoxId> = self.tree.boxes[root].children.iter().rev().copied().collect();
         while let Some(k) = stack.pop() {
             let bx = &self.tree.boxes[k];
-            if bx.style.float != Float::None || bx.style.out_of_flow() {
+            // (An inside marker isn't the first letter's: the letter after it is.)
+            if bx.style.float != Float::None || bx.style.out_of_flow() || bx.marker_box.is_some() {
                 continue;
             }
             match &bx.content {

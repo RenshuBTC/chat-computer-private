@@ -1122,6 +1122,14 @@ impl Page {
         let mut wanted: Vec<String> = Vec::new();
         let all = styles.of.iter().flatten().chain(styles.before.values()).chain(styles.after.values()).chain(styles.first_letter.values());
         for st in all {
+            // (Pictures in ::before's and ::after's content, and list items' markers'.)
+            let content = st.content.iter().flat_map(|c| c.iter()).filter_map(|p| if let crate::style::ContentPart::Image(u) = p { Some(u.clone()) } else { None });
+            let marker = st.list_image.iter().filter(|_| st.display == crate::style::Display::ListItem).map(|u| String::from(&**u));
+            for u in content.chain(marker) {
+                if !u.starts_with('#') && !self.style_pictures.contains_key(&u) && !wanted.contains(&u) {
+                    wanted.push(u);
+                }
+            }
             let border = st.border_image.as_ref().and_then(|b| b.source.as_ref());
             for img in [&st.bg, &st.mask].into_iter().flatten().flat_map(|l| l.images.iter().flatten()).chain(border) {
                 if let crate::effects::Image::Url(u, _) = img
@@ -1283,7 +1291,7 @@ impl Page {
                 }
             }
             let styles = self.styles.as_ref().expect("worked out above");
-            let mut tree = Tree::build(&self.doc, styles, &mut Picker { of: &self.picture_of, densities: &self.densities });
+            let mut tree = Tree::build(&self.doc, styles, &mut Picker { of: &self.picture_of, densities: &self.densities, urls: Some(&self.style_pictures) });
             let laid = Layout::new(&mut tree, ty, &Known { resources: &self.resources, images: &self.style_pictures }, w, h, dpr).run();
             // (With frames, kept as it is: their documents are put in their places in a copy.)
             if laid.items.iter().any(|i| matches!(i.paint, Paint::Frame { .. })) {

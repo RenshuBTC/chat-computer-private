@@ -39,11 +39,17 @@ pub struct LayoutInputs {
 pub struct Picker<'a> {
     pub of: &'a [(NodeId, usize)],
     pub densities: &'a [(NodeId, f32)],
+    /// The pictures styles name, by address (where they're known).
+    pub urls: Option<&'a alloc::collections::BTreeMap<alloc::string::String, usize>>,
 }
 
 impl Pictures for Picker<'_> {
     fn picture(&mut self, _doc: &Document, node: NodeId) -> Option<usize> {
         self.of.iter().find(|(n, _)| *n == node).map(|(_, r)| *r)
+    }
+
+    fn url(&self, url: &str) -> Option<usize> {
+        self.urls?.get(url).copied().filter(|&r| r != usize::MAX)
     }
 
     fn density(&self, node: NodeId) -> f32 {
@@ -119,7 +125,7 @@ pub fn fresh_layout(vm: &mut Vm) {
     let dpr = if dpr > 0.0 { dpr } else { 1.0 };
     let view = Viewport { width: w, height: ht };
     let styles = style::compute(&h.doc, &Sheets { ua: &inputs.ua, author: &inputs.author, fonts: &inputs.fonts, now: inputs.now, scripted: &inputs.scripted }, view, dpr);
-    let mut tree = Tree::build(&h.doc, &styles, &mut Picker { of: &inputs.picture_of, densities: &inputs.densities });
+    let mut tree = Tree::build(&h.doc, &styles, &mut Picker { of: &inputs.picture_of, densities: &inputs.densities, urls: None });
     let laid = Layout::new(&mut tree, text::Type::shared(), &SizesOf(&inputs.sizes, &inputs.own), w * dpr, ht * dpr, dpr).run();
     h.rects = rects_of(&laid, &h.doc, w * dpr, dpr);
     h.styles = Some(Arc::new(styles));

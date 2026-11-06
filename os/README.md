@@ -987,12 +987,17 @@ writes for each person, in place of Ubuntu's catalogue.
     between keyframes, with their timing functions), the Web Animations API (element.animate), SVG clip paths,
     iframes (each frame's document a page of its own, its scripts run, laid out in the frame's box and drawn there,
     unless it says another site may not show it), border-image, inset, outset, groove and ridge borders shaded as
-    Chrome shades them, ex, ch and cap measured in the element's own font, ::first-letter, outlines, and boxes'
-    edges snapped to whole pixels as Chrome snaps them.
+    Chrome shades them, ex, ch and cap measured in the element's own font, ::first-letter, outlines, boxes' edges
+    snapped to whole pixels as Chrome snaps them, CSS counters and every counter style CSS defines (@counter-style
+    too), lists numbered and marked as Chrome numbers and marks them (start, reversed and value; its discs, circles,
+    squares and disclosure triangles; ::marker; list-style-image), quotes in each language's marks, generated
+    content's attr() and pictures, tab stops, text placed to a quarter of a pixel and kerned across inline boxes as
+    Chrome sets it, a word that runs on through several boxes wrapped whole, underlines and line-throughs where Chrome
+    draws them, and align-content in blocks.
     Measured by the Web Platform Tests every browser runs (each test and its reference
     drawn by Chat Computer and compared; the scripted tests run in it): to do there is what they and comparing sites
-    with Chrome turn up, first writing modes, CSS transitions, and CSS's painting order for floats. ✓ SVG pictures
-    (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
+    with Chrome turn up, first letter-spacing, CSS's painting order for floats, writing modes and CSS transitions.
+    ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
     plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time
     zone. To do: touchpads.

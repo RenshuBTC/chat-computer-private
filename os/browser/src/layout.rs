@@ -7,10 +7,10 @@
 //! fixed, the latter at the page's top), translate(); overflow clipped. Floats are laid out where they come, as
 //! blocks. Everything in device pixels, from the page's top left.
 
-use crate::boxes::{BoxId, Content, Control, LBox, Tree};
+use crate::boxes::{BoxId, Content, Control, LBox, Marker, Tree};
 use crate::effects::{self, BgSize, BoxArea, ClipPath, Filter, Gradient, Image, Layers, ObjectFit, Pos, Repeat, Shape, ShapeRadius};
 use crate::num;
-use crate::style::{Align, BorderStyle, Display, FlexDirection, GridPlace, ListStyle, Position, Size, Style, TextAlign, Track, Transform, VAlign};
+use crate::style::{Align, BorderStyle, Display, FlexDirection, GridPlace, Position, Size, Style, TextAlign, Track, Transform, VAlign};
 use crate::values::{self, Color, Len};
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
@@ -449,6 +449,8 @@ enum FragKind {
     /// on the line it ends on).
     Back { owner: BoxId, first: bool, last: bool },
     Marker { text: String, owner: BoxId },
+    /// A list marker's shape (its box the fragment's).
+    Shape { shape: Marker, owner: BoxId },
 }
 
 pub struct Layout<'a> {
@@ -560,6 +562,8 @@ enum Piece {
     /// A word (and the box it's from), with whether a line may break after it, and the space after it (its width;
     /// 0 for none).
     Word { text: String, owner: BoxId, w: f32, space: f32, breaks: bool },
+    /// A tab kept (white-space: pre and the like): on to the next tab stop.
+    Tab { owner: BoxId },
     /// A line break.
     Break,
     /// An atomic inline box (its margin box's width).
@@ -977,6 +981,17 @@ impl<'a> Layout<'a> {
                     word += w;
                     line += w;
                 }
+                Piece::Tab { owner } => {
+                    let to = self.tab_stop(*owner, line);
+                    if nowrap {
+                        word += to - line;
+                    } else {
+                        mn = mn.max(word);
+                        word = 0.0;
+                    }
+                    line = to;
+                    trailing = 0.0;
+                }
                 Piece::Break => {
                     mx = mx.max(line - trailing);
                     mn = mn.max(word);
@@ -1125,6 +1140,18 @@ impl<'a> Layout<'a> {
         // (A button's insides in the middle of its height, as Chrome puts them: an icon in a 40px button.)
         if self.tree.boxes[b].centered && !replaced && !matches!(s.display, Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid) && content_h < h {
             self.shift_inside(b, crate::num::floor((h - content_h) / 2.0));
+        } else if !replaced && matches!(s.display, Display::Block | Display::FlowRoot | Display::ListItem | Display::InlineBlock) && content_h < h {
+            // align-content in a block container, as Chrome has it: what's in it moved down within its height, to
+            // the middle or the end, when it's shorter.
+            let room = h - content_h;
+            let dy = match s.align_content {
+                Align::Center | Align::SpaceAround | Align::SpaceEvenly => room / 2.0,
+                Align::End => room,
+                _ => 0.0,
+            };
+            if dy > 0.0 {
+                self.shift_inside(b, dy);
+            }
         }
         self.tree.boxes[b].h = h + frame_h;
     }
@@ -1459,7 +1486,68 @@ impl<'a> Layout<'a> {
                 }
             }
         }
+        self.kern_across(&mut out);
         out
+    }
+
+    /// Words side by side with no space between, in one font and size, though they're two boxes' (a <span>'s and the
+    /// words after it, a ::before's quote and its element's first word), kerned as one run of text, as Chrome shapes
+    /// them: the first's width made what the pair's kerning makes it.
+    fn kern_across(&mut self, pieces: &mut [Piece]) {
+        let mut last: Option<usize> = None;
+        for i in 0..pieces.len() {
+            match &pieces[i] {
+                Piece::Word { text, owner, space: own_space, .. } => {
+                    let (text, owner) = (text.clone(), *owner);
+                    // (A word of nothing, a space alone: the space is what comes first.)
+                    let first = text.chars().next().or((*own_space > 0.0).then_some(' '));
+                    if let Some(j) = last
+                        && let Piece::Word { text: before, owner: before_owner, space, .. } = &pieces[j]
+                        && *before_owner != owner
+                    {
+                        let (a, b) = (self.tree.boxes[*before_owner].style.clone(), self.tree.boxes[owner].style.clone());
+                        let (fa, fb) = (face_of(&a), face_of(&b));
+                        // (After a space, the space and the letter.)
+                        let x = if *space > 0.0 { Some(' ') } else { before.chars().last() };
+                        if face_key(fa) == face_key(fb)
+                            && a.font_size == b.font_size
+                            && let (Some(x), Some(y)) = (x, first)
+                        {
+                            let (one, two) = (String::from(x), String::from(y));
+                            let pair = one.clone() + &two;
+                            let k = self.measure(&pair, fa, a.font_size) - self.measure(&one, fa, a.font_size) - self.measure(&two, fa, a.font_size);
+                            if k != 0.0
+                                && let Piece::Word { w, .. } = &mut pieces[j]
+                            {
+                                *w += k;
+                            }
+                        }
+                    }
+                    last = Some(i);
+                }
+                // (An inline box's edge with nothing to it doesn't part them, unless it's lifted or lowered off the
+                // baseline, or isolated from the text round it.)
+                Piece::Open { w, b } | Piece::Close { w, b } if *w == 0.0 && self.tree.boxes[*b].style.vertical_align == VAlign::Baseline && !self.tree.boxes[*b].style.bidi_isolate => {}
+                _ => last = None,
+            }
+        }
+    }
+
+    /// Where a tab at `at` (from its line's start) takes the pen, as Chrome has it: to the next of its tab stops
+    /// (every tab-size: so many of its font's spaces, or a length), or the one after if that's nearer than half a
+    /// space.
+    fn tab_stop(&mut self, owner: BoxId, at: f32) -> f32 {
+        let s = self.tree.boxes[owner].style.clone();
+        let space = self.measure(" ", face_of(&s), s.font_size);
+        let tab = if s.tab_size.1 { s.tab_size.0 } else { s.tab_size.0 * space };
+        if tab <= 0.0 {
+            return at;
+        }
+        let mut next = (crate::num::floor(at / tab) + 1.0) * tab;
+        if next - at < space / 2.0 {
+            next += tab;
+        }
+        next
     }
 
     /// A text box's words, white space handled.
@@ -1494,14 +1582,26 @@ impl<'a> Layout<'a> {
             Transform::None => String::from(t),
         };
         let mut word = String::new();
+        // (Whether the word being made comes after a space of this box's: it's set kerned with that space.)
+        let after_space = core::cell::Cell::new(false);
         let flush = |me: &mut Self, word: &mut String, out: &mut Vec<Piece>, space: f32, breaks: bool| {
             if !word.is_empty() {
-                let w = me.measure(word, face, size);
+                // Its width as Chrome sets it, a run with the spaces round it: kerned with the space before it, and the
+                // space after it with its last letter.
+                let w = if after_space.get() { me.measure(&(String::from(" ") + word), face, size) - space_w } else { me.measure(word, face, size) };
+                let space = match word.chars().last() {
+                    Some(last) if space > 0.0 => {
+                        let last = String::from(last);
+                        space + me.measure(&(last.clone() + " "), face, size) - me.measure(&last, face, size) - space_w
+                    }
+                    _ => space,
+                };
                 out.push(Piece::Word { text: core::mem::take(word), owner, w, space, breaks });
             } else if space > 0.0 {
                 // A space with no word before it (after an inline box's start, say): a word of nothing.
                 out.push(Piece::Word { text: String::new(), owner, w: 0.0, space, breaks });
             }
+            after_space.set(space > 0.0);
         };
         for c in text.chars() {
             match c {
@@ -1510,11 +1610,15 @@ impl<'a> Layout<'a> {
                     out.push(Piece::Break);
                     *space_before = true;
                 }
+                '\t' if keep_spaces => {
+                    flush(self, &mut word, out, 0.0, wraps);
+                    out.push(Piece::Tab { owner });
+                    *space_before = true;
+                }
                 ' ' | '\t' | '\n' | '\r' | '\u{c}' => {
                     if keep_spaces {
-                        // Each space kept (a tab as four).
-                        let n = if c == '\t' { 4.0 } else { 1.0 };
-                        flush(self, &mut word, out, space_w * n, wraps);
+                        // Each space kept.
+                        flush(self, &mut word, out, space_w, wraps);
                         *space_before = true;
                     } else if !*space_before {
                         flush(self, &mut word, out, space_w, wraps);
@@ -1599,6 +1703,8 @@ impl<'a> Layout<'a> {
         // Whether the line may break before the next piece (after a space, between Chinese characters, around an
         // atomic box; not between two words of different boxes with nothing between them).
         let mut breakable = false;
+        // Where on this line it may break last (the place in `line` the next line would start at).
+        let mut last_break: Option<usize> = None;
         let mut pending_open: Vec<Piece> = Vec::new();
         let finish = |lines: &mut Vec<Vec<Piece>>, line: &mut Vec<Piece>| {
             lines.push(core::mem::take(line));
@@ -1631,6 +1737,18 @@ impl<'a> Layout<'a> {
                     used = 0.0;
                     has_content = false;
                     breakable = false;
+                    last_break = None;
+                }
+                Piece::Tab { owner } => {
+                    line.append(&mut pending_open);
+                    used = self.tab_stop(owner, used);
+                    has_content = true;
+                    breakable = wraps;
+                    if breakable {
+                        last_break = Some(line.len() + 1);
+                    }
+                    line_h = line_h.max(self.tree.boxes[owner].style.line_px());
+                    line.push(p);
                 }
                 Piece::Float { b: k } => {
                     // At this line's top, where it fits beside what's on the line already (the line's room made
@@ -1661,10 +1779,35 @@ impl<'a> Layout<'a> {
                         used = 0.0;
                         has_content = false;
                         breakable = false;
+                        last_break = None;
                         // (A space at a line's start goes.)
                         if text.is_empty() {
                             continue;
                         }
+                    } else if wraps
+                        && has_content
+                        && used + need > room + 0.01
+                        && let Some(k) = last_break.filter(|&k| k > 0 && k < line.len())
+                    {
+                        // No place to break just before it (it goes on from the word before, in another box: a
+                        // quote's mark, a <b> in a word): back to the last place the line may break, and what came
+                        // after that on to the next line with it.
+                        queue.push(p);
+                        while let Some(o) = pending_open.pop() {
+                            queue.push(o);
+                        }
+                        while line.len() > k {
+                            if let Some(r) = line.pop() {
+                                queue.push(r);
+                            }
+                        }
+                        finish(&mut lines, &mut line);
+                        next_line!();
+                        used = 0.0;
+                        has_content = false;
+                        breakable = false;
+                        last_break = None;
+                        continue;
                     }
                     if wraps && !has_content && need > room + 0.01 && here.1 < w - 0.01 && self.next_float_end(line_y).is_some() {
                         // Too wide for the room beside the floats: down to where they end.
@@ -1693,6 +1836,9 @@ impl<'a> Layout<'a> {
                         has_content = true;
                     }
                     breakable = breaks || space > 0.0;
+                    if breakable {
+                        last_break = Some(line.len() + 1);
+                    }
                     line_h = line_h.max(self.tree.boxes[owner].style.line_px());
                     line.push(p);
                 }
@@ -1710,6 +1856,7 @@ impl<'a> Layout<'a> {
                     let kb = &self.tree.boxes[k];
                     line_h = line_h.max(kb.h + kb.margin[0] + kb.margin[2]);
                     line.push(p);
+                    last_break = Some(line.len());
                 }
             }
         }
@@ -1723,13 +1870,14 @@ impl<'a> Layout<'a> {
         let mut at = y;
         let mut frags: Vec<Frag> = Vec::new();
         let mut last_baseline = None;
+        let mut first_baseline = None;
         let mut first_line = true;
         // Inline boxes open across lines: where each started on this line.
         let mut open_now: Vec<BoxId> = Vec::new();
         let shows = |line: &Vec<Piece>| {
             line.iter().any(|p| match p {
                 Piece::Word { text, .. } => !text.is_empty(),
-                Piece::Atomic { .. } | Piece::Break => true,
+                Piece::Atomic { .. } | Piece::Break | Piece::Tab { .. } => true,
                 Piece::Open { w, .. } | Piece::Close { w, .. } => *w > 0.0,
                 Piece::Float { .. } | Piece::Out { .. } => false,
             })
@@ -1744,9 +1892,10 @@ impl<'a> Layout<'a> {
             if band_top > at {
                 at = band_top;
             }
+            // (Preserved spaces are something: a line of them in a <pre> is a line.)
             let visible = line.iter().any(|p| match p {
-                Piece::Word { text, .. } => !text.is_empty(),
-                Piece::Atomic { .. } | Piece::Break => true,
+                Piece::Word { text, owner, space, .. } => !text.is_empty() || (*space > 0.0 && self.tree.boxes[*owner].style.white_space.keeps_spaces()),
+                Piece::Atomic { .. } | Piece::Break | Piece::Tab { .. } => true,
                 Piece::Open { w, .. } | Piece::Close { w, .. } => *w > 0.0,
                 Piece::Float { .. } | Piece::Out { .. } => false,
             });
@@ -1773,6 +1922,10 @@ impl<'a> Layout<'a> {
                         last_space = 0.0;
                     }
                     Piece::Open { w: ow, .. } | Piece::Close { w: ow, .. } => content_w += ow,
+                    Piece::Tab { owner } => {
+                        content_w = self.tab_stop(*owner, content_w);
+                        last_space = 0.0;
+                    }
                     Piece::Break | Piece::Float { .. } | Piece::Out { .. } => {}
                 }
             }
@@ -1862,6 +2015,11 @@ impl<'a> Layout<'a> {
             for (k, p) in line.iter().enumerate() {
                 let (_, _, vshift) = metrics.get(k).copied().unwrap_or((0.0, 0.0, 0.0));
                 match p {
+                    Piece::Tab { owner } => {
+                        flush_run(self, &mut frags, &mut run, pen);
+                        let line_start = start_x + shift;
+                        pen = line_start + self.tab_stop(*owner, pen - line_start);
+                    }
                     Piece::Word { text, owner, w: ww, space, .. } => {
                         let same = run.as_ref().is_some_and(|(o, _, _, sh)| *o == *owner && *sh == vshift);
                         if !same {
@@ -1936,6 +2094,9 @@ impl<'a> Layout<'a> {
                 frags.push(Frag { kind: FragKind::Back { owner: o, first: false, last: false }, x, y: 0.0, w: -1.0, h: 0.0 });
             }
             last_baseline = Some(baseline_y);
+            if first_line {
+                first_baseline = Some(baseline_y);
+            }
             at += line_h;
             first_line = false;
         }
@@ -1945,7 +2106,8 @@ impl<'a> Layout<'a> {
         if let Some(item) = self.list_owner(b)
             && self.markers.insert(item)
         {
-            self.marker(item, b, x, y, &frags);
+            let baseline = first_baseline.unwrap_or_else(|| y + self.baseline(&self.tree.boxes[item].style.clone()).0);
+            self.marker(item, b, baseline);
         }
         if let Some(bl) = last_baseline {
             self.tree.boxes[b].baseline = Some(bl - self.tree.boxes[b].y);
@@ -2036,11 +2198,11 @@ impl<'a> Layout<'a> {
     /// Ends an inline box's background on a line at `end`: its top and height from its font, about the baseline.
     fn close_back(&mut self, frags: &mut [Frag], owner: BoxId, end: f32, baseline_y: f32, last: bool) {
         let s = self.tree.boxes[owner].style.clone();
-        let (bo, lh) = self.baseline(&s);
-        // (The content area: the font's height, a little less than its line's, centred on it as the line's is.)
-        let content = s.font_size * 1.2;
-        let top = baseline_y - bo + (lh - content) / 2.0 - self.tree.boxes[owner].padding[0] - self.tree.boxes[owner].border[0];
-        let h = content + self.frame_h(owner);
+        // (The content area: from the font's ascent above the baseline to its descent below, whole pixels each, as
+        // Chrome has it.)
+        let (ascent, descent) = s.ascent_descent();
+        let top = baseline_y - ascent - self.tree.boxes[owner].padding[0] - self.tree.boxes[owner].border[0];
+        let h = ascent + descent + self.frame_h(owner);
         if let Some(f) = frags.iter_mut().rev().find(|f| matches!(f.kind, FragKind::Back { owner: o, .. } if o == owner) && f.w < 0.0) {
             f.w = (end - f.x).max(0.0);
             f.y = top;
@@ -2089,50 +2251,46 @@ impl<'a> Layout<'a> {
         None
     }
 
-    /// A list item's marker ("•", "1."), to the left of its first line (or inside it, for list-style-position inside).
-    fn marker(&mut self, item: BoxId, block: BoxId, x: f32, y: f32, frags: &[Frag]) {
-        let s = self.tree.boxes[item].style.clone();
-        if s.list_style == ListStyle::None || s.list_image || s.display != Display::ListItem {
-            return;
-        }
-        let n = self.list_number(item);
-        let text = match s.list_style {
-            ListStyle::Disc => String::from("\u{2022}"),
-            ListStyle::Circle => String::from("\u{25E6}"),
-            ListStyle::Square => String::from("\u{25AA}"),
-            ListStyle::Decimal => alloc::format!("{n}."),
-            ListStyle::LowerAlpha => alloc::format!("{}.", alpha(n, b'a')),
-            ListStyle::UpperAlpha => alloc::format!("{}.", alpha(n, b'A')),
-            ListStyle::LowerRoman => alloc::format!("{}.", roman(n).to_lowercase()),
-            ListStyle::UpperRoman => alloc::format!("{}.", roman(n)),
-            ListStyle::None => return,
-        };
-        let face = face_of(&s);
-        let mw = self.measure(&text, face, s.font_size);
-        let (_, lh) = self.baseline(&s);
-        // The first line's place: its first words', else the block's top; the marker to the left of the item's
-        // content (inside it, for list-style-position: inside: there's room made for it by the line's indent).
-        let line_top = frags.iter().find(|f| matches!(f.kind, FragKind::Words { .. })).map_or(y, |f| f.y);
-        let item_x = self.tree.boxes[item].x + self.tree.boxes[item].border[3] + self.tree.boxes[item].padding[3];
-        let mx = if s.list_inside { x } else { item_x.min(x) - mw - s.font_size * 0.5 };
-        if let Some(slot) = self.frags.get_mut(block) {
-            slot.push(Frag { kind: FragKind::Marker { text, owner: item }, x: mx, y: line_top, w: mw, h: lh });
-        }
+    /// A list item's marker outside it, beside its first line (at `baseline`), as Chrome puts it: words ("1. ") ending
+    /// at the item's content box's left edge; a shape where `marker_place` puts it.
+    /// The style a list item's marker is drawn in: its ::marker's, else its own.
+    fn marker_style(&self, item: BoxId) -> Arc<Style> {
+        self.tree.boxes[item].marker_style.clone().unwrap_or_else(|| self.tree.boxes[item].style.clone())
     }
 
-    /// A list item's number: its place among its list's items.
-    fn list_number(&self, item: BoxId) -> i64 {
-        let Some(p) = self.tree.boxes[item].parent else { return 1 };
-        let mut n: i64 = 1;
-        for &k in &self.tree.boxes[p].children {
-            if k == item {
-                return n;
+    fn marker(&mut self, item: BoxId, block: BoxId, baseline: f32) {
+        let Some(m) = self.tree.boxes[item].marker.clone() else { return };
+        let s = self.marker_style(item);
+        let x = &self.tree.boxes[item];
+        let edge = x.x + x.border[3] + x.padding[3];
+        let frag = match m {
+            Marker::Text(text) => {
+                let w = self.measure(&text, face_of(&s), s.font_size);
+                let (bo, lh) = self.baseline(&s);
+                Frag { kind: FragKind::Marker { text, owner: item }, x: edge - w, y: baseline - bo, w, h: lh }
             }
-            if self.tree.boxes[k].style.display == Display::ListItem {
-                n += 1;
+            // A picture: on the baseline, 7 pixels left of the edge (once it's come); one with no size of its own
+            // (an SVG with none) a square half the ascent high, as Chrome makes it.
+            Marker::Image(n) => {
+                let Some((iw, ih)) = self.sizes.size(n) else { return };
+                let (w, h) = match self.sizes.intrinsic(n).map(|i| (i.width, i.height)) {
+                    None => (iw as f32 * self.dpr, ih as f32 * self.dpr),
+                    Some((Some(w), Some(h))) => (w * self.dpr, h * self.dpr),
+                    Some(_) => {
+                        let side = (s.ascent_px() / 2) as f32;
+                        (side, side)
+                    }
+                };
+                Frag { kind: FragKind::Shape { shape: Marker::Image(n), owner: item }, x: edge - 7.0 - w, y: baseline - h, w, h }
             }
+            shape => {
+                let (x, y, size) = marker_place(&s, &shape, edge, baseline, true);
+                Frag { kind: FragKind::Shape { shape, owner: item }, x, y, w: size, h: size }
+            }
+        };
+        if let Some(slot) = self.frags.get_mut(block) {
+            slot.push(frag);
         }
-        n
     }
 
     // ------------------------------------------------------------------------------------------------ flex
@@ -3756,6 +3914,18 @@ impl<'a> Layout<'a> {
         let content = self.tree.boxes[b].content.clone();
         let (cx, cy) = (bx + border[3] + padding[3], by + border[0] + padding[0]);
         let (cw, ch) = ((bw - border[1] - border[3] - padding[1] - padding[3]).max(0.0), (bh - border[0] - border[2] - padding[0] - padding[2]).max(0.0));
+        // An inside marker's shape: from its box's left (a pixel in, past the pixel it starts back), its box's bottom
+        // the line's baseline.
+        if let Some(shape) = self.tree.boxes[b].marker_box.clone()
+            && shape != Marker::Text(String::new())
+        {
+            let start = if matches!(shape, Marker::Open | Marker::Closed) { bx } else { bx + 1.0 };
+            let (x, y, size) = marker_place(s, &shape, start, by + bh, false);
+            for paint in marker_paints(&shape, x, y, size, s.color) {
+                items.push(Item { paint, clip, node });
+            }
+            return;
+        }
         match content {
             Content::Image { image: Some(n), .. } if self.sizes.size(n).is_some() => {
                 // object-fit and object-position: the picture's place in its box (cut to the box).
@@ -3854,21 +4024,39 @@ impl<'a> Layout<'a> {
                 let color = s.color;
                 items.push(Item { paint: Paint::Text { x: f.x, y: f.y, w: f.w, text: text.clone(), face: face_of(&s), size: s.font_size, line: f.h, color }, clip, node });
                 let (bo, _) = self.baseline(&s);
-                let thick = (s.font_size / 16.0).max(1.0);
+                // The lines as Chrome draws them: a tenth of the size thick (in whole pixels, one at least); an
+                // underline half that (one pixel at least) below the baseline; a line-through a third of the ascent
+                // up, its middle there; an overline on the ascent's top.
+                let t = (s.font_size / 10.0).max(1.0);
+                let thick = crate::num::floor(t).max(1.0);
+                let base = f.y + bo;
+                let ascent = s.ascent_px() as f32;
                 let dc = s.decoration_color.unwrap_or(s.color);
                 if s.underline {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo + s.font_size * 0.12, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
+                    let y = base + crate::num::ceil(t / 2.0).max(1.0);
+                    items.push(Item { paint: Paint::Rect { x: f.x, y, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
                 }
                 if s.line_through {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo - s.font_size * 0.3, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
+                    let y = crate::num::round(base - ascent / 3.0 - t / 2.0);
+                    items.push(Item { paint: Paint::Rect { x: f.x, y, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
                 }
                 if s.overline {
-                    items.push(Item { paint: Paint::Rect { x: f.x, y: f.y + bo - s.font_size * 0.95, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
+                    items.push(Item { paint: Paint::Rect { x: f.x, y: base - ascent - thick, w: f.w, h: thick, color: dc, radius: [0.0; 4] }, clip, node });
                 }
             }
             FragKind::Marker { text, owner } => {
-                let s = self.tree.boxes[*owner].style.clone();
+                let s = self.marker_style(*owner);
                 items.push(Item { paint: Paint::Text { x: f.x, y: f.y, w: f.w, text: text.clone(), face: face_of(&s), size: s.font_size, line: f.h, color: s.color }, clip, node: self.tree.boxes[*owner].node });
+            }
+            FragKind::Shape { shape, owner } => {
+                let s = self.marker_style(*owner);
+                let node = self.tree.boxes[*owner].node;
+                if let Marker::Image(n) = shape {
+                    items.push(Item { paint: Paint::Picture { x: f.x, y: f.y, w: f.w, h: f.h, n: *n, at: Rect::new(f.x, f.y, f.w, f.h), radius: [0.0; 4], pixelated: s.pixelated }, clip, node });
+                }
+                for paint in marker_paints(shape, f.x, f.y, f.w, s.color) {
+                    items.push(Item { paint, clip, node });
+                }
             }
             FragKind::Back { owner, first, last } => {
                 let s = self.tree.boxes[*owner].style.clone();
@@ -4350,31 +4538,54 @@ fn track_least(t: &Track, w: f32) -> f32 {
     }
 }
 
-/// A list's letters for a number: 1 a, 26 z, 27 aa.
-fn alpha(n: i64, base: u8) -> String {
-    let mut n = n.max(1);
-    let mut out = Vec::new();
-    while n > 0 {
-        n -= 1;
-        out.push((base + (n % 26) as u8) as char);
-        n /= 26;
-    }
-    out.iter().rev().collect()
+/// A disc's, circle's or square's size as Chrome works it out from its font's ascent (whole pixels): half of two-thirds
+/// of it, rounded up.
+pub fn bullet_size(ascent: i32) -> i32 {
+    (ascent * 2 / 3 + 1) / 2
 }
 
-fn roman(n: i64) -> String {
-    let mut n = n.clamp(1, 3999);
-    let mut out = String::new();
-    for (v, s) in [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")] {
-        while n >= v {
-            out.push_str(s);
-            n -= v;
+/// A disclosure triangle's square's size, as Chrome makes it: two-thirds of the font's size.
+pub fn disclosure_size(font_size: f32) -> f32 {
+    font_size * 0.66
+}
+
+/// Where a list marker's shape goes, as Chrome puts it: a disc's, circle's or square's box (its top left and size)
+/// from its font's ascent, `start` its left (outside the item: two-thirds of the ascent and 7 pixels left of the
+/// content's edge, `edge`) and its top half the third of the ascent below the ascent's top; a disclosure triangle's
+/// 0.66em square sitting on the baseline (outside: it and 8 pixels left of the edge).
+fn marker_place(s: &Style, shape: &Marker, edge: f32, baseline: f32, outside: bool) -> (f32, f32, f32) {
+    if matches!(shape, Marker::Open | Marker::Closed) {
+        let size = disclosure_size(s.font_size);
+        let x = if outside { edge - size - 8.0 } else { edge };
+        return (x, baseline - size, size);
+    }
+    let a = s.ascent_px();
+    let offset = a * 2 / 3;
+    let size = bullet_size(a) as f32;
+    let x = if outside { edge - offset as f32 - 7.0 } else { edge };
+    (x, baseline - a as f32 + (3 * (a - offset) / 2) as f32, size)
+}
+
+/// A list marker's shape drawn: a disc, a circle a pixel thick, a square, a triangle pointing right (closed) or down
+/// (open), in the box `x`, `y`, `size`.
+fn marker_paints(shape: &Marker, x: f32, y: f32, size: f32, color: Color) -> Vec<Paint> {
+    match shape {
+        Marker::Disc => alloc::vec![Paint::Rect { x, y, w: size, h: size, color, radius: [size / 2.0; 4] }],
+        Marker::Square => alloc::vec![Paint::Rect { x, y, w: size, h: size, color, radius: [0.0; 4] }],
+        Marker::Circle => {
+            // (Its line on the circle's edge: half outside it, half in.)
+            let r = size / 2.0 + 0.5;
+            alloc::vec![Paint::Border { x: x - 0.5, y: y - 0.5, w: size + 1.0, h: size + 1.0, widths: [1.0; 4], color, radius: [r; 4] }]
         }
+        Marker::Open | Marker::Closed => {
+            let p = |fx: f32, fy: f32| (x + fx * size, y + fy * size);
+            let points = if *shape == Marker::Open { alloc::vec![p(0.0, 0.07), p(0.5, 0.93), p(1.0, 0.07)] } else { alloc::vec![p(0.0, 0.0), p(0.86, 0.5), p(0.0, 1.0)] };
+            let group = Group { clip_path: Some((alloc::vec![points], false)), ..Group::none() };
+            alloc::vec![Paint::Begin(Box::new(group)), Paint::Rect { x, y, w: size, h: size, color, radius: [0.0; 4] }, Paint::End]
+        }
+        Marker::Text(_) | Marker::Image(_) => Vec::new(),
     }
-    out
 }
-
-
 
 /// A border's side (`r`, side k: 0 top, 1 right, 2 bottom, 3 left) as the pieces its style draws, each with its
 /// corners' radius: solid, one piece; dashed, dashes three times as long as the border is thick, spaced evenly

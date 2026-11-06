@@ -1678,3 +1678,71 @@ fn an_outline_is_drawn_round_the_border_box_over_what_comes_after() {
     assert!(rings[0].0 > blue, "over the block after it");
     assert_eq!((rings[1].3, rings[1].4), (10.0, 10.0), "inset: inside its edge");
 }
+
+#[test]
+fn counters_and_quotes_are_worked_out_in_document_order() {
+    let mut p = page("<style>ol { counter-reset: item } li { counter-increment: item } li::before { content: counters(item, '.') ' ' }\
+                      .x::before { content: '[' attr(data-n) '|' counter(c, upper-roman) '|' counter(none-made) ']' }\
+                      #c { counter-reset: c 3 } #c span { counter-increment: c }</style>\
+                      <body><ol><li>a<ol><li>b</li><li>c</li></ol></li><li>d</li></ol>\
+                      <div id=c><span></span><p class=x data-n=7>e</p></div><p><q>one <q>two</q></q></p></body>");
+    let l = laid(&mut p);
+    // (Each ::before's words, then its element's; the items' markers too.)
+    let texts: Vec<String> = l.items.iter().filter_map(|i| if let Paint::Text { text, .. } = &i.paint { Some(text.clone()) } else { None }).collect();
+    let all = texts.join("/");
+    for want in ["1/a", "1.1/b", "1.2/c", "2/d", "[7|IV|0]/e", "\u{201C}/one/\u{2018}/two/\u{2019}/\u{201D}"] {
+        assert!(all.contains(want), "{want} in {texts:?}");
+    }
+}
+
+#[test]
+fn list_items_are_numbered_and_marked_as_chrome_does() {
+    let mut p = page("<body style='margin:0;font:16px serif'><ol style='padding-left:100px'><li>a<li value=10>b<li>c</ol>\
+                      <ol reversed><li>x<li>y</ol><ul><li>disc</ul><ol style='list-style-type: lower-roman' start=4><li>iv</ol>\
+                      <details><summary>s</summary>hidden words</details></body>");
+    let l = laid(&mut p);
+    let texts: Vec<(String, f32)> = l.items.iter().filter_map(|i| if let Paint::Text { text, x, .. } = &i.paint { Some((text.clone(), *x)) } else { None }).collect();
+    let marker = |t: &str| texts.iter().find(|(s, _)| s == t).cloned();
+    // Words ending at the item's content edge: "1. " is 16 pixels of Times New Roman's.
+    assert_eq!(marker("1. ").map(|m| m.1), Some(84.0), "{texts:?}");
+    assert!(marker("10. ").is_some() && marker("11. ").is_some(), "a value goes on: {texts:?}");
+    assert!(marker("2. ").is_some() && marker("iv. ").is_some(), "reversed and lower-roman: {texts:?}");
+    assert!(!texts.iter().any(|(t, _)| t.contains("hidden")), "a closed <details> shows its summary alone");
+    // A disc: a circle the size Chrome works out (16px Times: ascent 14, so 5 pixels).
+    let disc = l.items.iter().find_map(|i| if let Paint::Rect { w, h, radius, .. } = i.paint { (w == 5.0 && h == 5.0 && radius[0] == 2.5).then_some(()) } else { None });
+    assert!(disc.is_some(), "a disc");
+    // counter-style names written as Chrome writes them.
+    assert_eq!(crate::counter_style::marker("cjk-ideographic", 1010, &Default::default()), "一千零一十、");
+}
+
+#[test]
+fn an_empty_after_that_clears_holds_its_floats() {
+    let mut p = page("<style>.cf::after { content: ''; display: table; clear: both }</style><body style='margin:0'>\
+                      <div class=cf><div style='float:left;width:10px;height:80px'></div></div><div id=n style='height:5px'></div></body>");
+    let n = p.doc.descendants(0).find(|&k| p.doc.element(k).is_some_and(|e| e.id() == Some("n"))).unwrap();
+    let l = laid(&mut p);
+    let y = l.boxes.iter().find(|(k, _)| *k == n).map(|(_, r)| r.y).unwrap();
+    assert_eq!(y, 80.0, "below the float: the empty ::after cleared it");
+}
+
+#[test]
+fn a_kept_tab_goes_on_to_the_next_tab_stop() {
+    let mut p = page("<body style='margin:0'><pre style='font:16px serif;margin:0'>abcdefghi\tX\n\tY</pre></body>");
+    let l = laid(&mut p);
+    let texts: Vec<(String, f32)> = l.items.iter().filter_map(|i| if let Paint::Text { text, x, .. } = &i.paint { Some((text.clone(), *x)) } else { None }).collect();
+    // (Times New Roman's space is 4 pixels at 16px: stops every 32; "abcdefghi" ends less than half a space before
+    // the second, so the third.)
+    assert!(texts.iter().any(|(t, x)| t == "X" && *x == 96.0), "{texts:?}");
+    assert!(texts.iter().any(|(t, x)| t == "Y" && *x == 32.0), "{texts:?}");
+}
+
+#[test]
+fn a_word_in_two_boxes_goes_to_the_next_line_whole() {
+    // ("wor" and "ds" are one word, though in two boxes: too long for the line, it all goes to the next.)
+    let mut p = page("<body style='margin:0;font:16px serif'><div style='width:70px'>aaaa bbb wor<b>ds</b></div></body>");
+    let l = laid(&mut p);
+    let at: Vec<(String, f32)> = l.items.iter().filter_map(|i| if let Paint::Text { text, y, .. } = &i.paint { Some((text.clone(), *y)) } else { None }).collect();
+    let y = |t: &str| at.iter().find(|(s, _)| s.contains(t)).map(|(_, y)| *y).unwrap();
+    assert!(y("wor") > y("aaaa"), "{at:?}");
+    assert_eq!(y("wor"), y("ds"), "{at:?}");
+}

@@ -10,6 +10,8 @@ extern crate alloc;
 pub mod address;
 pub mod animate;
 pub mod boxes;
+pub mod counter_style;
+pub mod counters;
 pub mod css;
 pub mod dom;
 pub mod effects;

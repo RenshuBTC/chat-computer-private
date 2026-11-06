@@ -396,6 +396,8 @@ pub struct Sheet {
     pub fonts: Vec<FontFace>,
     /// Its @keyframes rules.
     pub keyframes: Vec<Keyframes>,
+    /// Its @counter-style rules: each one's name and descriptors.
+    pub counter_styles: Vec<(String, Vec<Decl>)>,
 }
 
 /// An @keyframes rule: its name, and each keyframe's places (0 to 1: "from" 0, "to" 1, percentages) and
@@ -753,6 +755,11 @@ fn rules(t: &[Tok], view: Viewport, out: &mut Sheet, depth: u32) {
                             "keyframes" | "-webkit-keyframes" | "-moz-keyframes" | "-o-keyframes" => {
                                 if let Some(k) = keyframes(prelude, inner) {
                                     out.keyframes.push(k);
+                                }
+                            }
+                            "counter-style" => {
+                                if let [Tok::Ident(n)] = crate::values::trim(prelude) {
+                                    out.counter_styles.push((n.clone(), declarations(inner)));
                                 }
                             }
                             "layer" | "container" | "scope" | "document" | "-moz-document" | "starting-style" => {
@@ -1302,6 +1309,8 @@ pub enum PseudoElement {
     Before,
     After,
     FirstLetter,
+    /// A list item's marker.
+    Marker,
 }
 
 #[derive(Clone, Debug)]
@@ -1480,6 +1489,9 @@ fn simple(t: &[Tok], c: &mut Compound, spec: &mut (u32, u32, u32), pe: &mut Opti
                     "before" => *pe = Some(PseudoElement::Before),
                     "after" => *pe = Some(PseudoElement::After),
                     "first-letter" => *pe = Some(PseudoElement::FirstLetter),
+                    // (A ::before's or ::after's own marker isn't styled here: never matched.)
+                    "marker" if pe.is_some() => c.pseudos.push(Pseudo::Never),
+                    "marker" => *pe = Some(PseudoElement::Marker),
                     "slotted" => {
                         // (What's slotted; what the compound before it says of the slot isn't checked.)
                         let end = block_end(t, 2);

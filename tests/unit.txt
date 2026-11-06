@@ -1,0 +1,8 @@
+﻿short path: Remove-Item -Recurse worked here
+Please type y for yes or n for no.
+
+What would you like to do?
+  1. One
+  2. Two
+Please type a number from 1 to 2.
+409/409 checks passed

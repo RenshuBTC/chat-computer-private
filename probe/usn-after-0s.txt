@@ -1,0 +1,12 @@
+﻿> fsutil usn queryjournal C: exit code 0
+Usn Journal ID   : 0x01dd6d88bb15f647
+First Usn        : 0x0000000000000000
+Next Usn         : 0x0000000000000000
+Lowest Valid Usn : 0x0000000000000000
+Max Usn          : 0x00000fffffff0000
+Maximum Size     : 0x0000000002000000 (32.0 MB)
+Allocation Delta : 0x0000000000800000 ( 8.0 MB)
+Minimum record version supported : 2
+Maximum record version supported : 4
+Write range tracking: Disabled
+

@@ -28,6 +28,8 @@ const QUIRKS: &str = "table { font-weight: initial; font-style: initial; font-si
 /// The most style sheets and pictures one page may ask for.
 const MOST_SHEETS: usize = 64;
 const MOST_PICTURES: usize = 400;
+/// At most this many web fonts fetched for a page.
+const MOST_FONTS: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -36,6 +38,8 @@ pub enum Kind {
     Script,
     /// A module a module script imports (its text goes to the scripts' module loader).
     Module,
+    /// A web font an @font-face rule names (TrueType, WOFF or WOFF2).
+    Font,
 }
 
 /// Something the page asks for.
@@ -59,6 +63,8 @@ pub enum State {
     Picture(u32, u32),
     /// A script's text (taken when it runs).
     Script(String),
+    /// A web font that's come (kept in text::loaded: its number).
+    Font(u16),
     Failed,
 }
 
@@ -139,6 +145,10 @@ pub struct Page {
     /// The page's own style sheets, parsed (again when they change, or the view does: their @media rules), and the
     /// view they're parsed for.
     author: Arc<Vec<Sheet>>,
+    /// Its web fonts (its sheets' @font-face rules), as they've come.
+    web_fonts: Arc<Vec<style::WebFont>>,
+    /// Each web font asked for: its face, the resource it's fetched as, and its number once it's come.
+    font_loads: Vec<(crate::css::FontFace, usize, Option<u16>)>,
     sheets_for: (f32, f32),
     sheets_stale: bool,
     /// What its scripts lay the page out from on the spot needs giving them again.
@@ -241,6 +251,8 @@ impl Page {
             changed: true,
             ua: Arc::new(Sheet::default()),
             author: Arc::new(Vec::new()),
+            web_fonts: Arc::new(Vec::new()),
+            font_loads: Vec::new(),
             sheets_for: (-1.0, -1.0),
             sheets_stale: true,
             inputs_stale: true,
@@ -551,6 +563,50 @@ impl Page {
         self.changed = true;
     }
 
+    /// The web fonts the page's styles want that haven't been asked for: asked for, from the first of each one's
+    /// addresses in a format that's read (WOFF2, WOFF, TrueType or OpenType; or a data: address's bytes).
+    fn fetch_fonts(&mut self) {
+        let Some(styles) = self.styles.clone() else { return };
+        for &i in &styles.wanted_fonts {
+            let Some(font) = self.web_fonts.get(i) else { continue };
+            if self.font_loads.iter().any(|(f, _, _)| *f == font.face) || self.font_loads.len() >= MOST_FONTS {
+                continue;
+            }
+            let face = font.face.clone();
+            let source = face.sources.iter().find(|(_, format)| matches!(format.as_str(), "" | "woff2" | "woff" | "truetype" | "opentype" | "woff2-variations" | "woff-variations" | "truetype-variations" | "opentype-variations"));
+            let r = match source {
+                Some((address, _)) if address.trim_start().get(..5).is_some_and(|d| d.eq_ignore_ascii_case("data:")) => {
+                    data_url(address).map(|bytes| self.add(Kind::Font, None, Some(bytes)))
+                }
+                Some((address, _)) => self.url.join(address.trim()).ok().map(|u| self.add(Kind::Font, Some(u), None)),
+                None => None,
+            };
+            // (One that can't be fetched is noted all the same: it isn't asked for again.)
+            self.font_loads.push((face, r.unwrap_or(usize::MAX), None));
+        }
+    }
+
+    /// A web font came: kept (text::loaded), and the page laid out again in it.
+    pub fn font_came(&mut self, i: usize, bytes: &[u8]) {
+        let id = text::loaded::load(bytes);
+        if let Some(r) = self.resources.get_mut(i) {
+            r.state = id.map_or(State::Failed, State::Font);
+        }
+        let Some(k) = self.font_loads.iter().position(|(_, r, _)| *r == i) else { return };
+        self.font_loads[k].2 = id;
+        if id.is_some() {
+            let face = self.font_loads[k].0.clone();
+            let mut fonts = (*self.web_fonts).clone();
+            for f in fonts.iter_mut().filter(|f| f.face == face) {
+                f.loaded = id;
+            }
+            self.web_fonts = Arc::new(fonts);
+            self.styles = None;
+            self.changed = true;
+            self.inputs_stale = true;
+        }
+    }
+
     /// A picture came (decoded by the kernel): its size in pixels.
     pub fn picture_came(&mut self, i: usize, w: u32, h: u32) {
         if let Some(r) = self.resources.get_mut(i) {
@@ -595,7 +651,8 @@ impl Page {
             let view = Viewport { width: w / dpr, height: h / dpr };
             if self.styles.is_none() {
                 self.parse_sheets(view);
-                self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author }, view, dpr)));
+                self.styles = Some(Arc::new(style::compute(&self.doc, &Sheets { ua: &self.ua, author: &self.author, fonts: &self.web_fonts }, view, dpr)));
+                self.fetch_fonts();
                 // (An <svg> made before the colours it's drawn in were known: made again.)
                 if self.inline_svgs.iter().any(|(n, _, _, look)| {
                     let (color, paints) = self.svg_look(*n);
@@ -652,6 +709,16 @@ impl Page {
             author.push(css::sheet(&text, view));
         }
         author.extend(scoped);
+        // Its web fonts: each @font-face once, with its number if it has come.
+        let mut fonts: Vec<style::WebFont> = Vec::new();
+        for face in author.iter().flat_map(|s| s.fonts.iter()) {
+            if fonts.iter().any(|f| f.face == *face) {
+                continue;
+            }
+            let loaded = self.font_loads.iter().find(|(f, _, _)| f == face).and_then(|(_, _, id)| *id);
+            fonts.push(style::WebFont { face: face.clone(), loaded });
+        }
+        self.web_fonts = Arc::new(fonts);
         self.author = Arc::new(author);
         self.sheets_for = (view.width, view.height);
         self.sheets_stale = false;
@@ -689,7 +756,7 @@ impl Page {
         let (w, ht, _) = h.view;
         self.parse_sheets(Viewport { width: w, height: ht });
         let sizes = self.resources.iter().map(|r| if let State::Picture(w, h) = r.state { Some((w, h)) } else { None }).collect();
-        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), picture_of: self.picture_of.clone(), sizes };
+        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), fonts: self.web_fonts.clone(), picture_of: self.picture_of.clone(), sizes };
         if let Some(s) = self.script.as_mut() {
             s.host().layout_inputs = Some(alloc::rc::Rc::new(inputs));
         }

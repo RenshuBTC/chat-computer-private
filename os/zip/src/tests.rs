@@ -214,3 +214,40 @@ fn checksums() {
         (b << 16 | a) as u32
     });
 }
+
+// Brotli: google/brotli's own small test files (tests/testdata: x, ukkonooa, quickfox_repeated), and damage.
+const BROTLI_X: [u8; 5] = [11, 0, 128, 88, 3];
+const BROTLI_UKKONOOA: [u8; 69] = [
+    27, 118, 0, 0, 20, 74, 172, 155, 122, 189, 225, 151, 157, 127, 142, 194, 130, 54, 14, 156, 224, 144, 3, 247, 139, 158, 56,
+    230, 182, 0, 171, 195, 202, 160, 194, 218, 102, 54, 220, 205, 128, 141, 46, 33, 215, 110, 227, 234, 76, 184, 240, 210, 184,
+    199, 194, 112, 77, 58, 240, 105, 126, 161, 184, 69, 115, 171, 196, 87, 30,
+];
+const BROTLI_QUICKFOX: [u8; 58] = [
+    91, 255, 175, 2, 192, 34, 121, 92, 251, 90, 140, 66, 59, 244, 37, 85, 25, 90, 146, 153, 177, 53, 200, 25, 158, 158, 10,
+    123, 75, 144, 185, 60, 152, 200, 9, 64, 243, 230, 217, 77, 228, 109, 101, 27, 39, 135, 19, 95, 166, 233, 48, 150, 123, 60,
+    21, 216, 83, 28,
+];
+
+#[test]
+fn brotli_decompresses_googles_test_files() {
+    assert_eq!(brotli(&BROTLI_X, 100).unwrap(), b"X");
+    assert_eq!(
+        brotli(&BROTLI_UKKONOOA, 1000).unwrap(),
+        b"ukko nooa, ukko nooa oli kunnon mies, kun han meni saunaan, pisti laukun naulaan, ukko nooa, ukko nooa oli kunnon mies."
+    );
+    // (The quick brown fox, 4096 times over and a bit: from a few dictionary words and copies of them.)
+    let fox = brotli(&BROTLI_QUICKFOX, 1 << 20).unwrap();
+    let line = b"The quick brown fox jumps over the lazy dog";
+    assert_eq!(fox.len(), 176_128);
+    assert!(fox.chunks(line.len()).take(4000).all(|c| c == line));
+    // Too big for the cap, and damage anywhere: an error, never a crash.
+    assert_eq!(brotli(&BROTLI_QUICKFOX, 1000), Err(Error::TooBig));
+    assert!(brotli(&BROTLI_UKKONOOA[..40], 1000).is_err());
+    for i in 0..BROTLI_UKKONOOA.len() {
+        for flip in [1u8, 0x10, 0x80] {
+            let mut d = BROTLI_UKKONOOA;
+            d[i] ^= flip;
+            let _ = brotli(&d, 1000);
+        }
+    }
+}

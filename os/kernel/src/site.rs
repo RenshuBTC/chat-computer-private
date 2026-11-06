@@ -592,6 +592,8 @@ impl Site {
                     (Some(bytes), _) => {
                         if kind == Kind::Picture {
                             picture_came(page, &mut self.pictures, &mut self.pictures_bytes, i, &bytes);
+                        } else if kind == Kind::Font {
+                            page.font_came(i, &bytes);
                         } else {
                             page.failed(i);
                         }
@@ -600,7 +602,7 @@ impl Site {
                     (None, Some(u)) => {
                         let accept = match kind {
                             Kind::Sheet => web::http::ACCEPT_CSS,
-                            Kind::Script | Kind::Module => web::http::ACCEPT_SCRIPT,
+                            Kind::Script | Kind::Module | Kind::Font => web::http::ACCEPT_SCRIPT,
                             Kind::Picture => web::http::ACCEPT_PICTURE,
                         };
                         self.fetching.push((i, Fetch::request(u, accept, None, Some(page.url.clone()))));
@@ -623,6 +625,7 @@ impl Site {
                         page.sheet_came(i, css);
                     }
                     (Ok(got), Some(Kind::Picture)) => picture_came(page, &mut self.pictures, &mut self.pictures_bytes, i, &got.bytes),
+                    (Ok(got), Some(Kind::Font)) => page.font_came(i, &got.bytes),
                     (Ok(got), Some(Kind::Script | Kind::Module)) => {
                         let js = web::page::decode(&got.bytes, &got.kind);
                         page.script_came(i, js);

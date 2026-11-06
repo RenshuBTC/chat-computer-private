@@ -16,6 +16,7 @@
 extern crate alloc;
 
 mod compose;
+pub mod loaded;
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -115,22 +116,25 @@ pub enum Face {
     SansBoldItalic,
     /// A web page's: its family, and whether it's bold and italic (each a font of its own, or an instance of one).
     Web(Family, bool, bool),
+    /// A font the page loaded (loaded.rs: by its number), the family whose web font has the characters it lacks, and
+    /// whether it's drawn bold (its bold instance, if it's variable, else made up) and leaned (an italic made up).
+    Loaded(u16, Family, bool, bool),
 }
 
 impl Face {
     fn bold(self) -> bool {
-        matches!(self, Face::Bold | Face::BoldItalic | Face::SansBold | Face::SansBoldItalic | Face::Web(_, true, _))
+        matches!(self, Face::Bold | Face::BoldItalic | Face::SansBold | Face::SansBoldItalic | Face::Web(_, true, _) | Face::Loaded(_, _, true, _))
     }
     /// Leaned by the engine (a font without its italic): never a web face, whose italics are fonts of their own.
     fn slanted(self) -> bool {
-        matches!(self, Face::Italic | Face::BoldItalic | Face::SansItalic | Face::SansBoldItalic)
+        matches!(self, Face::Italic | Face::BoldItalic | Face::SansItalic | Face::SansBoldItalic | Face::Loaded(_, _, _, true))
     }
     fn sans(self) -> bool {
         matches!(self, Face::Sans | Face::SansBold | Face::SansItalic | Face::SansBoldItalic)
     }
 
     /// A number for each face (for keeping what's been drawn or measured in each).
-    pub fn key(self) -> u8 {
+    pub fn key(self) -> u16 {
         match self {
             Face::Regular => 0,
             Face::Bold => 1,
@@ -141,13 +145,19 @@ impl Face {
             Face::SansBold => 6,
             Face::SansItalic => 7,
             Face::SansBoldItalic => 8,
-            Face::Web(f, bold, italic) => 9 + (f as u8) * 4 + bold as u8 + 2 * italic as u8,
+            Face::Web(f, bold, italic) => 9 + (f as u16) * 4 + bold as u16 + 2 * italic as u16,
+            Face::Loaded(id, f, bold, italic) => 32 + (id.min(4000) * 3 + f as u16) * 4 + bold as u16 + 2 * italic as u16,
         }
     }
 
-    /// Which of the web fonts a web face is drawn in, and whether in its bold instance (a variable font's).
+    /// Which of the web fonts a web face is drawn in, and whether in its bold instance (a variable font's). (A loaded
+    /// font's face: the web font for the characters it lacks.)
     fn web(self) -> Option<(usize, bool)> {
-        let Face::Web(family, bold, italic) = self else { return None };
+        let (family, bold, italic) = match self {
+            Face::Web(family, bold, italic) => (family, bold, italic),
+            Face::Loaded(_, family, bold, italic) => (family, bold, italic),
+            _ => return None,
+        };
         Some(match family {
             Family::Serif => (bold as usize + 2 * italic as usize, false),
             Family::Sans => (4 + italic as usize, bold),
@@ -194,6 +204,38 @@ impl Outline for Slant<'_> {
     }
 }
 
+/// An outline scaled (a loaded font's, from its own units to the built-in fonts' 1000 to the em).
+struct Scale<'a> {
+    to: &'a mut dyn Outline,
+    num: i64,
+    den: i64,
+}
+
+impl Scale<'_> {
+    fn s(&self, v: i32) -> i32 {
+        let n = v as i64 * self.num;
+        ((n + if n >= 0 { self.den / 2 } else { -self.den / 2 }) / self.den) as i32
+    }
+}
+
+impl Outline for Scale<'_> {
+    fn move_to(&mut self, x: i32, y: i32) {
+        let (x, y) = (self.s(x), self.s(y));
+        self.to.move_to(x, y);
+    }
+    fn line_to(&mut self, x: i32, y: i32) {
+        let (x, y) = (self.s(x), self.s(y));
+        self.to.line_to(x, y);
+    }
+    fn quad_to(&mut self, cx: i32, cy: i32, x: i32, y: i32) {
+        let (cx, cy, x, y) = (self.s(cx), self.s(cy), self.s(x), self.s(y));
+        self.to.quad_to(cx, cy, x, y);
+    }
+    fn close(&mut self) {
+        self.to.close();
+    }
+}
+
 /// An outline moved along (a glyph to its place on the line).
 struct Shift<'a> {
     to: &'a mut dyn Outline,
@@ -230,6 +272,8 @@ enum Source {
     Cjk,
     /// One of the web fonts (by its place in WEB).
     Web(u8),
+    /// A font a page loaded (by its number).
+    Loaded(u16),
 }
 
 /// Characters that show nothing and take no room: joiners and zero-width spaces, variation selectors (the "as an
@@ -482,6 +526,44 @@ impl Type {
             Source::FallbackMono => &self.fallback_mono,
             Source::Cjk => &self.cjk,
             Source::Web(i) => &self.web[i as usize].font,
+            Source::Loaded(id) => match loaded::get(id) {
+                Some(f) => &f.font,
+                None => &self.font,
+            },
+        }
+    }
+
+    /// A number in the units of a glyph's font in the built-in fonts' units (1000 to the em): a loaded font's scaled.
+    fn units(&self, source: Source, v: i32) -> i32 {
+        match source {
+            Source::Loaded(id) => match loaded::get(id) {
+                Some(f) if f.upem != 1000 => ((v as i64 * 1000 + if v >= 0 { f.upem as i64 / 2 } else { -(f.upem as i64) / 2 }) / f.upem as i64) as i32,
+                _ => v,
+            },
+            _ => v,
+        }
+    }
+
+    /// A glyph's ink's bounds (x0, y0, x1, y1), in the built-in fonts' units.
+    fn bounds_of(&self, source: Source, glyph: u16) -> Option<(i32, i32, i32, i32)> {
+        let (a, b, c, d) = self.font_of(source).bounds(glyph)?;
+        Some((self.units(source, a), self.units(source, b), self.units(source, c), self.units(source, d)))
+    }
+
+    /// A glyph's outline, at the face's instance, in the built-in fonts' units.
+    fn draw_glyph(&self, source: Source, glyph: u16, face: Face, out: &mut dyn Outline) -> bool {
+        let font = self.font_of(source);
+        let at = self.instance_of(source, face);
+        let go = |o: &mut dyn Outline| match at {
+            Some(at) => font.outline_at(glyph, at, o),
+            None => font.outline(glyph, o),
+        };
+        match source {
+            Source::Loaded(id) => match loaded::get(id) {
+                Some(f) if f.upem != 1000 => go(&mut Scale { to: out, num: 1000, den: f.upem as i64 }),
+                _ => go(out),
+            },
+            _ => go(out),
         }
     }
 
@@ -494,6 +576,7 @@ impl Type {
             Source::Text => self.bold.as_ref(),
             Source::Sans => self.sans_bold.as_ref(),
             Source::Web(i) => self.web[i as usize].bold.as_ref(),
+            Source::Loaded(id) => loaded::get(id).and_then(|f| f.bold.as_ref()),
             _ => None,
         }
     }
@@ -505,8 +588,10 @@ impl Type {
             && match source {
                 Source::Text => self.bold.is_none(),
                 Source::Sans => self.sans_bold.is_none(),
-                // (A web face's bold is a font of its own, or an instance of its variable one.)
+                // (A web face's bold is a font of its own, or an instance of its variable one; a loaded font's, its
+                // instance if it's variable, else made up.)
                 Source::Web(_) => false,
+                Source::Loaded(id) => loaded::get(id).is_none_or(|f| f.bold.is_none()),
                 _ => true,
             }
     }
@@ -514,6 +599,31 @@ impl Type {
     /// Where a character's glyph is for `face`: in the face's own font, else in a fallback font; else the face's own
     /// "missing" glyph (a box), for characters none has.
     fn glyph(&self, c: char, face: Face) -> (Source, u16) {
+        // A loaded font: its own glyphs, then its family's web font's, then the fallbacks'.
+        if let Face::Loaded(id, family, ..) = face
+            && let Some((i, _)) = face.web()
+        {
+            let own = Source::Loaded(id);
+            if loaded::get(id).is_some() {
+                let glyph = self.font_of(own).glyph_index(c);
+                if glyph != 0 {
+                    return (own, glyph);
+                }
+            }
+            let web = Source::Web(i as u8);
+            let order = if family == Family::Mono {
+                [web, Source::FallbackMono, Source::Fallback, Source::Text, Source::Cjk]
+            } else {
+                [web, Source::Fallback, Source::Text, Source::FallbackMono, Source::Cjk]
+            };
+            for source in order {
+                let glyph = self.font_of(source).glyph_index(c);
+                if glyph != 0 {
+                    return (source, glyph);
+                }
+            }
+            return (web, 0);
+        }
         // A web face: its own font, then the fallbacks (the code font's first, for monospace), then the text font's.
         if let Some((i, _)) = face.web() {
             let own = Source::Web(i as u8);
@@ -567,6 +677,14 @@ impl Type {
                 Some(&a) if face.bold() => a,
                 _ => self.web[i as usize].font.advance(glyph),
             },
+            Source::Loaded(id) => {
+                let f = loaded::get(id)?;
+                let a = match f.bold_advances.get(glyph as usize) {
+                    Some(&a) if face.bold() => a,
+                    _ => f.font.advance(glyph),
+                };
+                return Some(Set { source, glyph, face, advance: self.units(source, a as i32) });
+            }
             _ => self.font_of(source).advance(glyph),
         };
         Some(Set { source, glyph, face, advance: advance as i32 })
@@ -587,6 +705,13 @@ impl Type {
                 let w = &self.web[i as usize];
                 if bold && w.bold.is_some() { w.bold_kerning.pair(a.glyph, b.glyph) } else { w.kerning.pair(a.glyph, b.glyph) }
             }
+            (Source::Loaded(id), bold) => match loaded::get(id) {
+                Some(f) => {
+                    let k = if bold && f.bold.is_some() { f.bold_kerning.pair(a.glyph, b.glyph) } else { f.kerning.pair(a.glyph, b.glyph) };
+                    self.units(a.source, k)
+                }
+                None => 0,
+            },
             _ => 0,
         }
     }
@@ -671,7 +796,7 @@ impl Type {
             }
             // The marks left, placed in their canonical order.
             let base_font = self.font_of(base.source);
-            let ink = base_font.bounds(base.glyph);
+            let ink = self.bounds_of(base.source, base.glyph);
             let (mut top, mut bottom) = ink.map_or((0, 0), |(_, y0, _, y1)| (y1, y0));
             let mut stack: Vec<(u16, (i32, i32))> = Vec::new();
             for &k in &kept {
@@ -688,7 +813,7 @@ impl Type {
                     .marks_of(base.source, face)
                     .filter(|_| same)
                     .and_then(|marks| marks.on_mark(&stack, mark.glyph).or_else(|| marks.on_base(base.glyph, mark.glyph)));
-                let bounds = self.font_of(mark.source).bounds(mark.glyph);
+                let bounds = self.bounds_of(mark.source, mark.glyph);
                 let (dx, dy) = match (anchored, ink, bounds) {
                     (Some(at), _, _) => at,
                     (None, Some(_), Some((mx0, my0, mx1, my1))) => {
@@ -873,8 +998,13 @@ impl Type {
     /// puts it: its font's ascent and descent (rounded to whole pixels) in the middle of the line, the leading left
     /// over shared out above and below, the odd pixel below.
     pub fn baseline_in(&self, face: Face, style: Style) -> i32 {
-        let Face::Web(family, ..) = face else { return self.baseline(style) };
-        let (a, d, _) = family.rounded(style.size as f32 / ONE as f32);
+        let (a, d, _) = match face {
+            Face::Web(family, ..) => family.rounded(style.size as f32 / ONE as f32),
+            Face::Loaded(id, family, ..) => {
+                loaded::rounded(id, style.size as f32 / ONE as f32).unwrap_or_else(|| family.rounded(style.size as f32 / ONE as f32))
+            }
+            _ => return self.baseline(style),
+        };
         let (a, d) = (a as i32 * ONE, d as i32 * ONE);
         // Half the leading above, in whole pixels rounded down (Chrome's floor, a negative leading's too).
         let leading = style.line_height - (a + d);
@@ -922,13 +1052,8 @@ impl Type {
         let placed = self.shape(&chars);
         let width = placed.last().map_or(0, |p| p.pen + p.advance);
         for (units, up, s) in placed.into_iter().filter_map(|p| p.drawn.map(|(s, x, y)| (x, y, s))) {
-            let font = self.font_of(s.source);
-            let bold = self.instance_of(s.source, face);
             let mut shifted = Shift { to: out, dx: units * 64, dy: up * 64 };
-            let draw = |o: &mut dyn Outline| match bold {
-                Some(at) => font.outline_at(s.glyph, at, o),
-                _ => font.outline(s.glyph, o),
-            };
+            let draw = |o: &mut dyn Outline| self.draw_glyph(s.source, s.glyph, face, o);
             if face.slanted() {
                 draw(&mut Slant { to: &mut shifted });
             } else {
@@ -957,7 +1082,7 @@ impl Type {
         let content = self.scale(m.ascender as i32 - m.descender as i32, style.size);
         let baseline = top
             + match face {
-                Face::Web(..) => self.baseline_in(face, style),
+                Face::Web(..) | Face::Loaded(..) => self.baseline_in(face, style),
                 _ => (style.line_height - content) / 2 + self.scale(m.ascender as i32, style.size),
             };
         let mut raster = Raster::new(w, h);
@@ -965,12 +1090,7 @@ impl Type {
         pen.y = baseline;
         let apart = made_up_bold(style.size);
         for (units, up, s) in self.line(text, face) {
-            let font = self.font_of(s.source);
-            let bold = self.instance_of(s.source, face);
-            let draw = |out: &mut dyn Outline| match bold {
-                Some(at) => font.outline_at(s.glyph, at, out),
-                _ => font.outline(s.glyph, out),
-            };
+            let draw = |out: &mut dyn Outline| self.draw_glyph(s.source, s.glyph, face, out);
             // (In bold, a fallback font's glyph drawn twice, a little apart, as browsers make a bold up: it has none.)
             let strikes: &[i32] = if self.made_bold(s.source, face) { &[0, apart] } else { &[0] };
             for &dx in strikes {

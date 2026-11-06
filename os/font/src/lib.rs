@@ -14,6 +14,7 @@ mod marks;
 pub mod raster;
 mod store;
 mod vary;
+pub mod woff;
 
 pub use kern::Kerning;
 pub use marks::Marks;

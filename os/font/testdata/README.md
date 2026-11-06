@@ -11,3 +11,12 @@ SHA-256:
 ```
 5a455d1cfa099b601ab70751bb9673e8fe1854dc4500c80e1a220d0d75e31745  AtkinsonHyperlegibleNext.ttf
 ```
+
+`AtkinsonHyperlegibleNext.woff` is the same font as a WOFF, its tables compressed with zlib, made by fontTools 4.65.0
+(`TTFont(...).flavor = "woff"`, saved): the WOFF reader's test (`src/woff.rs`) makes it back into a font with every
+glyph as the TrueType file has it. (The WOFF2 tests make their own WOFF2s of the TrueType file, glyf transformed and
+not, `src/tests.rs`; the reader was also checked on WOFF2 fonts from the Web Platform Tests.)
+
+```
+3fabb530d638aed762ab3301f92340e5074a3619e320fb32ac7102290a440e6e  AtkinsonHyperlegibleNext.woff
+```

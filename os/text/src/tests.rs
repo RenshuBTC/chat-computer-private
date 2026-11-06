@@ -284,3 +284,33 @@ fn a_letter_and_its_marks_stay_together() {
     assert_eq!(ty.width("\u{30AB}\u{3099}", UNIT), ty.width("ガ", UNIT));
 }
 
+
+#[test]
+fn a_loaded_font_sets_text_as_the_same_font_built_in_does() {
+    let ty = Type::builtin();
+    let size = 16 * ONE;
+    // (The sans-serif web font, loaded as a page would load it: set as the built-in one sets it.)
+    let id = loaded::load(WEB[4]).expect("loaded");
+    assert_eq!(loaded::load(WEB[4]), Some(id), "the same font is kept once");
+    let text = "Hamburgefonstiv AV To 0123";
+    let web = Face::Web(Family::Sans, false, false);
+    let mine = Face::Loaded(id, Family::Sans, false, false);
+    assert_eq!(ty.width_in(text, mine, size), ty.width_in(text, web, size));
+    assert_eq!(ty.ink_in(text, mine, Style { size, line_height: 18 * ONE }, 0).coverage, ty.ink_in(text, web, Style { size, line_height: 18 * ONE }, 0).coverage);
+    // Its bold: its variable font's own instance, as the built-in's.
+    assert_eq!(ty.width_in(text, Face::Loaded(id, Family::Sans, true, false), size), ty.width_in(text, Face::Web(Family::Sans, true, false), size));
+    // Its line's measures: Arial's, as the built-in's.
+    assert_eq!(loaded::normal_line(id, 16.0), Some(Family::Sans.normal_line(16.0)));
+    // A font of 2000 units to the em (the same one, its head saying so): everything half as wide.
+    let mut big = WEB[6].to_vec();
+    let n = u16::from_be_bytes([big[4], big[5]]) as usize;
+    let head = (0..n).map(|i| 12 + 16 * i).find(|&r| &big[r..r + 4] == b"head").unwrap();
+    let off = u32::from_be_bytes([big[head + 8], big[head + 9], big[head + 10], big[head + 11]]) as usize;
+    big[off + 18..off + 20].copy_from_slice(&2000u16.to_be_bytes());
+    let half = loaded::load(&big).expect("loaded");
+    let w = ty.width_in("abc def", Face::Web(Family::Mono, false, false), size);
+    assert!((ty.width_in("abc def", Face::Loaded(half, Family::Mono, false, false), size) - w / 2).abs() <= 1);
+    // What it lacks: from its family's web font.
+    assert!(ty.width_in("€", Face::Loaded(half, Family::Mono, false, false), size) > 0);
+    assert_eq!(loaded::load(b"not a font"), None);
+}

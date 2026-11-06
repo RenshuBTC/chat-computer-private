@@ -1003,3 +1003,95 @@ fn an_inline_flex_button_sits_on_its_line_as_chrome_puts_it() {
     let c = box_of(&mut p, "c", 800.0);
     assert_eq!((c.x, c.y, c.w), (0.0, 32.0, 32.0));
 }
+
+#[test]
+fn font_face_rules_are_read_from_a_sheets_text() {
+    // (Comments, a data: address with its ";", formats, a range of weights, unicode-range as Google Fonts writes it,
+    // and one inside @media.)
+    let faces = crate::css::font_faces(
+        "/* @font-face { font-family: no } */ @font-face { font-family: 'My Font'; src: url(data:font/woff2;base64,AAAA) format('woff2'),\
+         url(\"/f.woff\") format(\"woff\"); font-weight: 300 700; font-style: italic; unicode-range: U+0000-00FF, U+1E00-1EFF, U+4??; }\
+         @media print { @font-face { font-family: B; src: url(b.ttf) } }",
+    );
+    assert_eq!(faces.len(), 2);
+    let f = &faces[0];
+    assert_eq!(f.family, "my font");
+    assert_eq!(f.sources, [(String::from("data:font/woff2;base64,AAAA"), String::from("woff2")), (String::from("/f.woff"), String::from("woff"))]);
+    assert_eq!((f.weight, f.italic), ((300, 700), true));
+    assert_eq!(f.ranges, [(0, 0xFF), (0x1E00, 0x1EFF), (0x400, 0x4FF)]);
+    assert!(f.covers('a' as u32) && !f.covers(0x500));
+    assert_eq!((faces[1].family.as_str(), faces[1].weight, faces[1].italic), ("b", (400, 400), false));
+}
+
+#[test]
+fn a_font_is_chosen_by_family_style_and_nearest_weight() {
+    use crate::style::{WebFont, pick_font};
+    let face = |w: (u16, u16), italic: bool, ranges: Vec<(u32, u32)>| WebFont {
+        face: crate::css::FontFace { family: String::from("f"), sources: Vec::new(), weight: w, italic, ranges },
+        loaded: None,
+    };
+    let fonts = [face((300, 300), false, vec![]), face((700, 700), false, vec![]), face((400, 400), true, vec![]), face((400, 400), false, vec![(0x400, 0x4FF)]), face((400, 400), false, vec![(0, 0xFF)])];
+    let names = [String::from("other"), String::from("f")];
+    // (400: the Latin one of the two for it; 500: up to 500, else lighter; 600: heavier; italic: the italic one.)
+    assert_eq!(pick_font(&fonts, &names, 400, false), Some((4, false, false)));
+    assert_eq!(pick_font(&fonts, &names, 500, false).map(|p| p.0), Some(4));
+    assert_eq!(pick_font(&fonts, &names, 600, false), Some((1, false, false)));
+    assert_eq!(pick_font(&fonts, &names, 200, false).map(|p| p.0), Some(0));
+    assert_eq!(pick_font(&fonts, &names, 400, true), Some((2, false, false)));
+    // (Bold from a face that isn't: made up. Italic with none in the family: leaned.)
+    let regular = [face((400, 400), false, vec![])];
+    assert_eq!(pick_font(&regular, &names, 700, true), Some((0, true, true)));
+    assert_eq!(pick_font(&regular, &[String::from("other")], 400, false), None);
+}
+
+#[test]
+fn a_web_font_is_fetched_and_the_words_set_in_it() {
+    let mut p = page(
+        "<html><head><style>@font-face { font-family: Mine; src: url(/mine.woff2) format('woff2'), url(/mine.ttf) format('truetype') }\
+         body { margin: 0; font-size: 16px } span { font-family: Mine, sans-serif; display: inline-block }</style></head>\
+         <body><div><span id=m>Hamburgefonstiv</span></div><div><span id=c style='font-family: \"Courier New\"'>Hamburgefonstiv</span></div></body></html>",
+    );
+    let ty = Type::builtin();
+    let before = box_of(&mut p, "m", 600.0).w;
+    let mut asked = Vec::new();
+    while let Some((i, kind, url, _)) = p.next_wanted() {
+        if kind == crate::page::Kind::Font {
+            asked.push((i, url.map(|u| u.to_string())));
+        }
+    }
+    // (Its first address in a format that's read.)
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].1.as_deref(), Some("https://example.com/mine.woff2"));
+    // It comes (the monospace web font, as a site might send Courier New's twin): the words are set in it.
+    p.font_came(asked[0].0, include_bytes!("../../fonts/ChatComputerWebMono-Regular.ttf"));
+    let after = box_of(&mut p, "m", 600.0).w;
+    assert!(after > before, "{before} {after}");
+    assert_eq!(after, box_of(&mut p, "c", 600.0).w);
+    // A font that can't be read: the words stay as they were.
+    let mut q = page("<html><head><style>@font-face { font-family: Bad; src: url(/bad.ttf) } body { margin: 0 } span { font-family: Bad, sans-serif; display: inline-block }</style></head><body><span id=b>Words</span></body></html>");
+    let w = box_of(&mut q, "b", 600.0).w;
+    while let Some((i, kind, _, _)) = q.next_wanted() {
+        if kind == crate::page::Kind::Font {
+            q.font_came(i, b"not a font");
+        }
+    }
+    assert_eq!(box_of(&mut q, "b", 600.0).w, w);
+    let _ = &ty;
+}
+
+#[test]
+fn an_element_with_an_id_is_a_global_and_custom_properties_are_worked_out() {
+    // (HTML's named properties: main, a form by its name; a global of the scripts' own or the window's comes first.
+    // getComputedStyle's custom property: its value worked out, var() replaced; invalid in a cycle.)
+    let mut p = scripted(
+        "<html><head><style>#t { --a: 10px; --b: var(--a) var(--a); --c: var(--c, 1px) }</style></head><body>\
+         <main id=main></main><form name=f></form><div id=alert></div><div id=t></div><script>\
+         var mine = 1;\
+         console.log([typeof main, main.tagName, typeof f, typeof alert, 'main' in window, typeof nothere, mine]);\
+         var cs = getComputedStyle(document.getElementById('t'));\
+         console.log(['[' + cs.getPropertyValue('--a') + ']', '[' + cs.getPropertyValue('--b') + ']', '[' + cs.getPropertyValue('--c') + ']']);\
+         </script></body></html>",
+    );
+    p.run(0.0);
+    assert_eq!(p.take_console(), [r#"["object", "MAIN", "object", "function", true, "undefined", 1]"#, r#"["[10px]", "[10px 10px]", "[]"]"#]);
+}

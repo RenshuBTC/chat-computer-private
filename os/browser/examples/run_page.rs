@@ -3,7 +3,7 @@
 //! page's time: 2000 if not said), and prints what its scripts printed; with --html, the page as its scripts left it.
 //! Its style sheets, pictures and scripts, and what its scripts fetch, are read from FILES (a folder) by their
 //! address's path (or as files.txt there names them), when it's given. With --ppm it's drawn WIDTH CSS pixels wide (and
-//! its window is that wide for its scripts too; 1280 if not said), 900 tall.
+//! its window is that wide for its scripts too; 1280 if not said), 900 tall (--window H: H tall).
 
 use browser::page::{Kind, Page, State};
 use browser::paint::{Painter, Shown, Surface};
@@ -53,7 +53,7 @@ fn run() {
                 continue;
             }
             match a.as_str() {
-                "--ms" | "--why" | "--eval" | "--before" => skip = 1,
+                "--ms" | "--why" | "--eval" | "--before" | "--window" => skip = 1,
                 "--ppm" => skip = 2,
                 "--html" | "--items" | "--boxes" => {}
                 _ => out.push(a),
@@ -84,7 +84,8 @@ fn run() {
     let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
     // (The window's size: as wide as the picture asked for, if one is.)
     let width: f32 = flag("--ppm").and_then(|i| args.get(i + 2)).and_then(|v| v.parse().ok()).unwrap_or(1280.0);
-    let height = 900.0;
+    // (Its window's height: 900 if not said; --window H says.)
+    let height: f32 = flag("--window").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(900.0);
     let mut page = Page::with_scripts(Url::parse(address).expect("an address"), &text, epoch, (width, height, 1.0), 0x1234_5678);
     // (A script of the tool's own, run before the page's: to watch what they do.)
     if let Some(i) = flag("--before") {
@@ -156,7 +157,7 @@ fn run() {
                 let d = &page.doc;
                 let e = d.element(n);
                 let desc = e.map(|e| format!("<{} id={:?} class={:?} style={:?}>", e.name, e.attr("id").unwrap_or(""), e.attr("class").unwrap_or("").chars().take(60).collect::<String>(), e.attr("style").unwrap_or("").chars().take(80).collect::<String>())).unwrap_or_else(|| String::from("(not an element)"));
-                let st = page.style_of(n).map(|s| format!("display {:?} position {:?} margin {:?} clip {}", s.display, s.position, s.margin, s.clip)).unwrap_or_default();
+                let st = page.style_of(n).map(|s| format!("display {:?} position {:?} margin {:?} clip {} families {:?} web_face {:?}", s.display, s.position, s.margin, s.clip, s.families, s.web_face)).unwrap_or_default();
                 println!("why: {desc} {rect:?} {st}");
                 at = d.parent(n);
             }
@@ -194,7 +195,8 @@ fn run() {
         fetch(&mut page, &mut pictures, &files, &index);
         let laid = page.lay_out(&ty, width, height, 1.0);
         let w = width as usize;
-        let h = (laid.height.ceil() as usize).clamp(1, 6000);
+        // (The whole page, up to 6000 pixels; with --window, the window's first screen, as a test's picture is.)
+        let h = if flag("--window").is_some() { height as usize } else { (laid.height.ceil() as usize).clamp(1, 6000) };
         let mut pixels = vec![0u32; w * h];
         let mut surface = Surface { pixels: &mut pixels, width: w, height: h, clip: (0, 0, w as i32, h as i32) };
         let mut painter = Painter::new();
@@ -207,6 +209,19 @@ fn run() {
             bytes.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
         }
         f.write_all(&bytes).ok();
+    }
+    if std::env::var("RUN_PAGE_RESOURCES").is_ok() {
+        for (i, r) in page.resources.iter().enumerate() {
+            let state = match &r.state {
+                State::Css(c) => format!("css {} bytes", c.len()),
+                State::Picture(w, h) => format!("picture {w}x{h}"),
+                State::Font(id) => format!("font {id}"),
+                State::Failed => String::from("failed"),
+                State::Waiting => String::from("waiting"),
+                State::Script(_) => String::from("script"),
+            };
+            eprintln!("resource {i}: {:?} {} {state}", r.kind, r.url.as_ref().map_or(String::from("(inline)"), |u| u.to_string()));
+        }
     }
     let _ = State::Waiting;
 }
@@ -223,6 +238,7 @@ fn fetch(page: &mut Page, pictures: &mut Pictures, files: &Option<std::path::Pat
             match (kind, bytes) {
                 (Kind::Sheet, Some(b)) => page.sheet_came(i, String::from_utf8_lossy(&b).into_owned()),
                 (Kind::Script | Kind::Module, Some(b)) => page.script_came(i, String::from_utf8_lossy(&b).into_owned()),
+                (Kind::Font, Some(b)) => page.font_came(i, &b),
                 (Kind::Picture, Some(b)) => match picture::decode_alpha(&b, 4000, 4000, u64::MAX) {
                     Ok((p, alpha)) => {
                         let (w, h) = picture::size(&b).unwrap_or((p.width, p.height));

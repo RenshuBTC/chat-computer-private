@@ -400,11 +400,14 @@ drivers.
   10.7 MB, which it sends uncompressed to a browser it doesn't know), its HTML read as browsers read it (quirks mode too), its style sheets and
   pictures fetched a few at a time as it asks for them, its CSS cascaded (selectors, @media, custom properties,
   calc(), modern colours; its text in the metric twins of the fonts Chrome uses on Windows, Times New Roman, Arial
-  and Courier New (`fonts/build_web.py`), so its words take the room and its lines the height they take in Chrome; its
+  and Courier New (`fonts/build_web.py`), so its words take the room and its lines the height they take in Chrome, or
+  in the page's own fonts (@font-face: TrueType, WOFF and WOFF2, fetched as the page needs them and chosen by family,
+  weight and style as CSS says, with a bold or italic made up as Chrome makes one where the page has none); its
   pictures JPEG, PNG, GIF or SVG, an <svg> in the page drawn as a picture too, see-through where they are) and laid
   out (checked against Chromium drawing the same files, element by element: rem as the root's font size, a flex
   line's height given to what stretches across it, fields as Chrome sizes them): blocks with their margins collapsing, lines of words wrapping round floats,
-  flex, grid, tables, positioned boxes, lists; borders solid, dashed, dotted or double, rounded (each corner its
+  flex, grid (its tracks sized by CSS Grid's own algorithm, named areas and auto-placement), tables, positioned boxes,
+  lists; borders solid, dashed, dotted or double, rounded (each corner its
   own), inset or outset; shadows. It scrolls with the wheel, the arrows and Page Up and Down; a click
   follows a link (Alt+Left goes back), ticks a box, or puts the caret in a field; Enter (or its button) sends its
   form (GET or POST), its submit event first. Without a pointer, Tab goes through its links, buttons and fields in
@@ -469,7 +472,10 @@ drivers.
   mark filtering sets, varying with the weight too). It's tested against fontTools' reading of the same font, at the
   default weight and at others, and against HarfBuzz: every glyph's advance at three weights, the kerning of every
   pair of 152 characters at four (`font/reference.py`), and where Lora's marks go on letters and on each other, at
-  the regular weight and the bold (`font/marks_reference.py`).
+  the regular weight and the bold (`font/marks_reference.py`). A web font packed as WOFF or WOFF2 is unpacked back
+  into its font (`font/src/woff.rs`: WOFF2's glyphs and their advances rebuilt from its transformed tables as the
+  W3C's specification says), tested on a font that fontTools packed as WOFF, and on the same font packed as WOFF2 by
+  the test itself, glyph for glyph the font it came from.
 * `text/` sets lines of text in those fonts: which font has each character (the fallback fonts for what Lora and
   the code font lack), how wide lines are, where they wrap (at spaces, and between the characters of Chinese,
   Japanese and Korean, as a browser breaks them: not before closing punctuation, nor after opening), and drawing
@@ -530,6 +536,9 @@ drivers.
   PNG, later): what Word, Excel and PowerPoint files are made of. Its decoder works as zlib's "puff" does, with a
   table for short codes; what comes out is capped, so a "zip bomb" stops. Tested against zlib at every level and
   strategy, Python's zipfile and Info-ZIP's zip (data descriptors, ZIP64, code page 437 names), and damaged streams.
+  It reads Brotli too (RFC 7932: its prefix codes, context modelling, and the 122 KB dictionary of words every
+  Brotli stream may refer to, which comes from Google's brotli under the MIT licence, `zip/README.md`), which is how
+  web fonts in WOFF2 are packed; checked against all ten of google/brotli's test files (three small ones in its tests).
 * `office/` reads the words in Word, Excel and PowerPoint files (Office Open XML) and OpenDocument's, through just
   enough XML of its own: a document's paragraphs (headings and lists by their styles, tables, text boxes once,
   tracked deletions and field codes left out, footnotes after), a workbook's cells (shared strings, number formats
@@ -954,8 +963,11 @@ writes for each person, in place of Ubuntu's catalogue.
     against Chromium (headless, drawing the same files) element by element: the metric twins of Chrome's fonts, line
     heights as Chrome works them out, its form controls' sizes, rem, flex items stretched as it stretches them,
     custom elements constructed once, popovers, each corner rounded its own, box shadows, a flex or grid item's
-    children's margins kept inside it, an <svg> filled as the page's style sheets say. To do there: web fonts
-    (@font-face), CSS masks (icons drawn through them), and the rest of what comparing sites with Chrome turns up. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
+    children's margins kept inside it, an <svg> filled as the page's style sheets say, CSS Grid's track sizing,
+    custom properties worked out as CSS says (cycles, inherit, initial), web fonts (@font-face, WOFF and WOFF2).
+    Measured by the Web Platform Tests every browser runs (each test and its reference drawn by Chat Computer and
+    compared; the scripted tests run in it): to do there is what they and comparing sites with Chrome turn up, first
+    CSS masks (icons drawn through them), WebP pictures, transforms, animations and writing modes. ✓ SVG pictures (in <img>, and <svg> in the page), and see-through pictures drawn over the page. ✓
     Canvas (its 2D drawing, text, pictures and pixels; animation frames). ✓ Intl (numbers, money, dates, times,
     plurals, lists, collation, segments; 87% of test262's intl402, the rest other languages'), in the PC's time
     zone. To do: touchpads.

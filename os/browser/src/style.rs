@@ -335,6 +335,89 @@ pub struct Style {
     /// It's absolutely positioned and its display was inline-level before that made it block-level: where it would
     /// have been is on its line, not under it.
     pub inline_origin: bool,
+    /// The font families it asks for, in order, in lower case (font-family's list).
+    pub families: Arc<Vec<String>>,
+    /// The page's font (text::loaded's number) its words are set in, if one of its families is a web font that has
+    /// come; and whether it's made bold and leaned (the face found is lighter, or upright).
+    pub web_face: Option<(u16, bool, bool)>,
+}
+
+/// A web font a page names (@font-face): its face, and its number in text::loaded once it has come.
+#[derive(Clone, Debug)]
+pub struct WebFont {
+    pub face: css::FontFace,
+    pub loaded: Option<u16>,
+}
+
+/// How far a face's weights are from the weight asked for, as CSS's font matching orders them (smaller nearer): in
+/// its range, none; asked for 400 to 500, heavier up to 500 first, then lighter, then heavier still; under 400,
+/// lighter first; over 500, heavier first.
+fn weight_rank(range: (u16, u16), want: u16) -> u32 {
+    let (lo, hi) = (range.0 as u32, range.1 as u32);
+    let w = want as u32;
+    if lo <= w && w <= hi {
+        return 0;
+    }
+    let (above, below) = (lo > w, hi < w);
+    let class = match (w, above, below) {
+        (400..=500, true, _) if lo <= 500 => 1,
+        (400..=500, _, true) => 2,
+        (400..=500, true, _) => 3,
+        (0..=399, _, true) => 1,
+        (0..=399, true, _) => 2,
+        (_, true, _) => 1,
+        _ => 2,
+    };
+    class * 10_000 + if above { lo - w } else { w - hi }
+}
+
+/// The web font (its place in `fonts`) CSS's font matching sets a family list's words in at a weight and style: the
+/// first of its families that an @font-face names; of that family's faces, those in its style (or, if it has none,
+/// the others), the nearest in weight, and of those the one for Latin letters (a family whose faces are each for a
+/// part of Unicode, as Google Fonts sends them). With whether it's made bold (a weight of 600 or more from a face
+/// lighter, or from a variable one's range) and leaned (italic from an upright face).
+pub fn pick_font(fonts: &[WebFont], families: &[String], weight: u16, italic: bool) -> Option<(usize, bool, bool)> {
+    for family in families {
+        let faces: Vec<usize> = (0..fonts.len()).filter(|&i| fonts[i].face.family == *family).collect();
+        if faces.is_empty() {
+            continue;
+        }
+        let styled: Vec<usize> = faces.iter().copied().filter(|&i| fonts[i].face.italic == italic).collect();
+        let pool = if styled.is_empty() { faces } else { styled };
+        let best = pool.iter().map(|&i| weight_rank(fonts[i].face.weight, weight)).min()?;
+        let near: Vec<usize> = pool.into_iter().filter(|&i| weight_rank(fonts[i].face.weight, weight) == best).collect();
+        let chosen = near.iter().copied().find(|&i| fonts[i].face.covers('a' as u32)).unwrap_or(near[0]);
+        let f = &fonts[chosen].face;
+        let bold = weight >= 600 && f.weight.0 < 600;
+        return Some((chosen, bold, italic && !f.italic));
+    }
+    None
+}
+
+/// font-family's names, in order, in lower case: a name of several words as one, its quotes taken off.
+fn family_list(v: &[Tok]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut name = String::new();
+    for t in v {
+        match t {
+            Tok::Ident(i) | Tok::Str(i) => {
+                if !name.is_empty() {
+                    name.push(' ');
+                }
+                name.push_str(&i.to_ascii_lowercase());
+            }
+            Tok::Comma => {
+                if !name.is_empty() {
+                    out.push(core::mem::take(&mut name));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !name.is_empty() {
+        out.push(name);
+    }
+    out
 }
 
 /// An SVG paint (a fill or a stroke) a style sheet gives: none, currentColor or a colour.
@@ -442,6 +525,8 @@ impl Style {
             fill: None,
             stroke: None,
             inline_origin: false,
+            families: Arc::new(Vec::new()),
+            web_face: None,
         }
     }
 
@@ -478,6 +563,9 @@ impl Style {
         s.hidden_text = self.hidden_text;
         s.fill = self.fill;
         s.stroke = self.stroke;
+        s.families = self.families.clone();
+        // (Text inherits its element's font; an element's own is worked out again from what it inherits.)
+        s.web_face = self.web_face;
         s
     }
 
@@ -485,7 +573,10 @@ impl Style {
     pub fn line_px(&self) -> f32 {
         match self.line_height {
             // (From its font's own ascent, descent and line gap, as Chrome works it out.)
-            LineHeight::Normal => self.family().normal_line(self.font_size),
+            LineHeight::Normal => match self.web_face.and_then(|(id, ..)| text::loaded::normal_line(id, self.font_size)) {
+                Some(h) => h,
+                None => self.family().normal_line(self.font_size),
+            },
             LineHeight::Factor(f) => self.font_size * f,
             LineHeight::Px(p) => p,
         }
@@ -525,6 +616,9 @@ pub struct Styles {
     pub of: Vec<Option<Arc<Style>>>,
     pub before: BTreeMap<NodeId, Arc<Style>>,
     pub after: BTreeMap<NodeId, Arc<Style>>,
+    /// The web fonts (by their place in Sheets' fonts) some element's words are to be set in: to be fetched, if they
+    /// haven't been.
+    pub wanted_fonts: alloc::collections::BTreeSet<usize>,
 }
 
 /// One selector of one rule, ready to match: which sheet and rule it's from, and its order in the cascade.
@@ -553,6 +647,8 @@ struct Index {
 pub struct Sheets<'a> {
     pub ua: &'a Sheet,
     pub author: &'a [Sheet],
+    /// The page's web fonts (its @font-face rules', as they've come).
+    pub fonts: &'a [WebFont],
 }
 
 pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Styles {
@@ -597,7 +693,8 @@ pub fn compute(doc: &Document, sheets: &Sheets, view: Viewport, dpr: f32) -> Sty
         view,
         dpr,
         rem: units_root.rem,
-        out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new() },
+        out: Styles { of: vec![None; doc.nodes.len()], before: BTreeMap::new(), after: BTreeMap::new(), wanted_fonts: alloc::collections::BTreeSet::new() },
+        fonts: sheets.fonts,
         sibling: SiblingInfo::new(doc),
     };
     // In the order they come, parents before children (no recursion: a page's elements can be deep).
@@ -671,6 +768,7 @@ impl SiblingInfo {
 }
 
 struct Cascade<'a> {
+    fonts: &'a [WebFont],
     doc: &'a Document,
     sheets: Vec<&'a Sheet>,
     entries: Vec<Entry>,
@@ -748,6 +846,7 @@ impl Cascade<'_> {
         }
         found.sort_by(|a, b| a.0.cmp(&b.0));
         let mut s = self.apply(id, parent, &found);
+        self.with_font(&mut s);
         // ::before and ::after.
         let pseudo: Vec<usize> = self.index.pseudo.clone();
         for which in [PseudoElement::Before, PseudoElement::After] {
@@ -771,7 +870,8 @@ impl Cascade<'_> {
             }
             pf.sort_by(|a, b| a.0.cmp(&b.0));
             let ps = self.apply_pseudo(id, &s, &pf);
-            if let Some(ps) = ps {
+            if let Some(mut ps) = ps {
+                self.with_font(&mut ps);
                 let map = if which == PseudoElement::Before { &mut self.out.before } else { &mut self.out.after };
                 map.insert(id, Arc::new(ps));
             }
@@ -780,6 +880,18 @@ impl Cascade<'_> {
             s.content = None;
         }
         s
+    }
+
+    /// The web font a style's words are set in, if one of its families is one (noted as wanted, to be fetched).
+    fn with_font(&mut self, s: &mut Style) {
+        s.web_face = None;
+        if self.fonts.is_empty() || s.families.is_empty() {
+            return;
+        }
+        if let Some((i, bold, lean)) = pick_font(self.fonts, &s.families, s.font_weight, s.italic) {
+            self.out.wanted_fonts.insert(i);
+            s.web_face = self.fonts[i].loaded.map(|id| (id, bold, lean));
+        }
     }
 
     /// Whether a rule is for an element at all, by the trees they're in: the browser's own rules are for every
@@ -2231,6 +2343,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
         "font-family" => {
             (s.mono, s.sans) = family_kind(v);
             s.generic_mono = generic_mono(v);
+            s.families = Arc::new(family_list(v));
         }
         "font" => {
             // [style] [variant] [weight] [stretch] size[/line-height] family
@@ -2287,6 +2400,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
             let rest: Vec<Tok> = ps.iter().skip(k).flat_map(|x| x.iter().cloned().chain(core::iter::once(Tok::Ws))).collect();
             (s.mono, s.sans) = family_kind(&rest);
             s.generic_mono = generic_mono(&rest);
+            s.families = Arc::new(family_list(&rest));
         }
         "line-height" => {
             if let Some(x) = line_height(v, c, s.font_size) {
@@ -2819,6 +2933,7 @@ fn inherit_one(s: &mut Style, from: &Style, name: &str) {
             s.mono = from.mono;
             s.sans = from.sans;
             s.generic_mono = from.generic_mono;
+            s.families = from.families.clone();
         }
         "font" => {
             s.font_size = from.font_size;

@@ -133,7 +133,7 @@ pub struct Layout<'a> {
     /// Boxes' min-content and max-content widths (border box, margins left out), worked out once.
     intrinsic: Vec<Option<(f32, f32)>>,
     /// Widths of words already measured (by face and size), to measure each once.
-    widths: alloc::collections::BTreeMap<(String, u8, u32), f32>,
+    widths: alloc::collections::BTreeMap<(String, u16, u32), f32>,
     /// The content height a box's next layout is to have, given it by its container (a stretched flex item's): its
     /// height is then definite, so its insides' percentages of it mean something.
     definite_h: Option<(BoxId, f32)>,
@@ -142,10 +142,14 @@ pub struct Layout<'a> {
 /// The face a style's words are set in: its family's web font (Chrome's defaults' metric twins), bold and italic as
 /// it says.
 fn face_of(s: &Style) -> Face {
-    Face::Web(s.family(), s.is_bold(), s.italic)
+    match s.web_face {
+        // (A web font the page loaded: its family's web font for what it lacks.)
+        Some((id, bold, lean)) => Face::Loaded(id, s.family(), bold, lean),
+        None => Face::Web(s.family(), s.is_bold(), s.italic),
+    }
 }
 
-fn face_key(f: Face) -> u8 {
+fn face_key(f: Face) -> u16 {
     f.key()
 }
 

@@ -1,8 +1,9 @@
 //! CSS read as browsers read it (CSS Syntax Level 3's tokens, then rules): style sheets' rules, each its selectors
 //! and declarations; a style attribute's declarations; @media's rules kept where its query matches the page's
 //! window (its width and height in CSS pixels), @supports', @layer's and @container's kept; @import's addresses
-//! noted, to be fetched; @font-face, @keyframes, @page and the like skipped. A rule whose selectors can't be read is
-//! dropped whole, as the standard says. What the declarations' values mean is style.rs's.
+//! noted, to be fetched; @font-face's fonts (font_faces: read from the sheet's text, as its unicode-range has to be);
+//! @keyframes, @page and the like skipped. A rule whose selectors can't be read is dropped whole, as the standard
+//! says. What the declarations' values mean is style.rs's.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -33,6 +34,58 @@ pub enum Tok {
     CloseParen,
     OpenCurly,
     CloseCurly,
+}
+
+/// Tokens written out as CSS again (a custom property's value, as getComputedStyle gives it), trimmed.
+pub fn serialize(t: &[Tok]) -> String {
+    let mut out = String::new();
+    for tok in t {
+        match tok {
+            Tok::Ident(s) => out.push_str(s),
+            Tok::Function(f) => {
+                out.push_str(f);
+                out.push('(');
+            }
+            Tok::AtKeyword(s) => {
+                out.push('@');
+                out.push_str(s);
+            }
+            Tok::Hash(s, _) => {
+                out.push('#');
+                out.push_str(s);
+            }
+            Tok::Str(s) => {
+                out.push('"');
+                for c in s.chars() {
+                    if c == '"' || c == '\\' {
+                        out.push('\\');
+                    }
+                    out.push(c);
+                }
+                out.push('"');
+            }
+            Tok::Url(u) => {
+                out.push_str("url(");
+                out.push_str(u);
+                out.push(')');
+            }
+            Tok::Number(n) => out.push_str(&alloc::format!("{n}")),
+            Tok::Percent(n) => out.push_str(&alloc::format!("{n}%")),
+            Tok::Dimension(n, u) => out.push_str(&alloc::format!("{n}{u}")),
+            Tok::Delim(c) => out.push(*c),
+            Tok::Ws => out.push(' '),
+            Tok::Colon => out.push(':'),
+            Tok::Semicolon => out.push(';'),
+            Tok::Comma => out.push(','),
+            Tok::OpenSquare => out.push('['),
+            Tok::CloseSquare => out.push(']'),
+            Tok::OpenParen => out.push('('),
+            Tok::CloseParen => out.push(')'),
+            Tok::OpenCurly => out.push('{'),
+            Tok::CloseCurly => out.push('}'),
+        }
+    }
+    String::from(out.trim())
 }
 
 /// CSS's tokens (comments dropped).
@@ -339,6 +392,220 @@ pub struct Sheet {
     /// The shadow root whose tree it styles (a <style> inside one: its rules are for that tree alone, its host
     /// through :host, and what's put in its slots through ::slotted()); None for the page's.
     pub scope: Option<usize>,
+    /// Its @font-face rules' fonts.
+    pub fonts: Vec<FontFace>,
+}
+
+/// A font an @font-face rule names: for a family, at weights and a style, for some characters, fetched from where
+/// it says.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontFace {
+    /// Its family's name, in lower case.
+    pub family: String,
+    /// Where it can be fetched from, in order: each address (as written) and its format() (lower case; "" if none).
+    pub sources: Vec<(String, String)>,
+    /// The weights it's for (the least and the most), and whether it's italic (or oblique).
+    pub weight: (u16, u16),
+    pub italic: bool,
+    /// The characters it's for (unicode-range's ranges): none, all of them.
+    pub ranges: Vec<(u32, u32)>,
+}
+
+impl FontFace {
+    /// Whether it has `c` in its unicode-range.
+    pub fn covers(&self, c: u32) -> bool {
+        self.ranges.is_empty() || self.ranges.iter().any(|&(a, b)| a <= c && c <= b)
+    }
+}
+
+/// Text with its comments taken out (outside strings).
+fn without_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let b = css.as_bytes();
+    let mut i = 0;
+    let mut quote = 0u8;
+    while i < b.len() {
+        let c = b[i];
+        if quote != 0 {
+            if c == b'\\' && i + 1 < b.len() {
+                out.push_str(&css[i..i + 2]);
+                i += 2;
+                continue;
+            }
+            if c == quote {
+                quote = 0;
+            }
+        } else if c == b'"' || c == b'\'' {
+            quote = c;
+        } else if c == b'/' && b.get(i + 1) == Some(&b'*') {
+            i = css[i + 2..].find("*/").map_or(b.len(), |e| i + 2 + e + 2);
+            continue;
+        }
+        // (A character whole: its bytes are copied as they come.)
+        let len = css[i..].chars().next().map_or(1, |ch| ch.len_utf8());
+        out.push_str(&css[i..i + len]);
+        i += len;
+    }
+    out
+}
+
+/// Splits text at `sep` where it isn't inside parentheses or quotes.
+fn split_top(text: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quote, mut start) = (0i32, None::<char>, 0usize);
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == '\\' {
+                    chars.next();
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                c if c == sep && depth <= 0 => {
+                    out.push(&text[start..i]);
+                    start = i + c.len_utf8();
+                }
+                _ => {}
+            },
+        }
+    }
+    out.push(&text[start..]);
+    out
+}
+
+/// A name as written, its quotes taken off.
+fn unquote(v: &str) -> String {
+    let v = v.trim();
+    let inner = if v.len() >= 2 && (v.starts_with('"') && v.ends_with('"') || v.starts_with('\'') && v.ends_with('\'')) { &v[1..v.len() - 1] } else { v };
+    String::from(inner.trim())
+}
+
+/// The fonts a style sheet's @font-face rules name, from its text (unicode-range's "U+1E00" isn't CSS's tokens).
+pub fn font_faces(css: &str) -> Vec<FontFace> {
+    let mut out = Vec::new();
+    if !css.contains("@font-face") && !css.to_ascii_lowercase().contains("@font-face") {
+        return out;
+    }
+    let text = without_comments(css);
+    let lower = text.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(at) = lower[from..].find("@font-face") {
+        let start = from + at + 10;
+        let Some(open) = text[start..].find('{').map(|o| start + o) else { break };
+        // Its block: to its closing brace (none inside strings or url()s counts).
+        let (mut depth, mut quote, mut end) = (0i32, None::<char>, text.len());
+        let mut chars = text[open..].char_indices();
+        while let Some((i, c)) = chars.next() {
+            match quote {
+                Some(q) => {
+                    if c == '\\' {
+                        chars.next();
+                    } else if c == q {
+                        quote = None;
+                    }
+                }
+                None => match c {
+                    '"' | '\'' => quote = Some(c),
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                },
+            }
+        }
+        let block = &text[open + 1..end.min(text.len())];
+        from = (end + 1).min(text.len());
+        let mut face = FontFace { family: String::new(), sources: Vec::new(), weight: (400, 400), italic: false, ranges: Vec::new() };
+        for decl in split_top(block, ';') {
+            let Some((name, value)) = decl.split_once(':') else { continue };
+            let value = value.trim().trim_end_matches("!important").trim();
+            match name.trim().to_ascii_lowercase().as_str() {
+                "font-family" => face.family = unquote(value).to_ascii_lowercase(),
+                "src" => {
+                    for part in split_top(value, ',') {
+                        let lower = part.to_ascii_lowercase();
+                        let Some(u) = lower.find("url(") else { continue };
+                        let rest = &part[u + 4..];
+                        // (To its ")": the first outside quotes.)
+                        let mut quote = None::<char>;
+                        let close = rest
+                            .char_indices()
+                            .find(|&(_, c)| match quote {
+                                Some(q) => {
+                                    if c == q {
+                                        quote = None;
+                                    }
+                                    false
+                                }
+                                None if c == '"' || c == '\'' => {
+                                    quote = Some(c);
+                                    false
+                                }
+                                None => c == ')',
+                            })
+                            .map_or(rest.len(), |(i, _)| i);
+                        let address = unquote(&rest[..close]);
+                        let format = lower.find("format(").map(|f| {
+                            let r = &part[f + 7..];
+                            unquote(&r[..r.find(')').unwrap_or(r.len())]).to_ascii_lowercase()
+                        });
+                        if !address.is_empty() {
+                            face.sources.push((address, format.unwrap_or_default()));
+                        }
+                    }
+                }
+                "font-weight" => {
+                    let ws: Vec<u16> = value
+                        .split_ascii_whitespace()
+                        .filter_map(|w| match w.to_ascii_lowercase().as_str() {
+                            "normal" => Some(400),
+                            "bold" => Some(700),
+                            n => n.parse::<f32>().ok().map(|v| v.clamp(1.0, 1000.0) as u16),
+                        })
+                        .collect();
+                    if let Some(&a) = ws.first() {
+                        let b = ws.get(1).copied().unwrap_or(a);
+                        face.weight = (a.min(b), a.max(b));
+                    }
+                }
+                "font-style" => {
+                    let v = value.to_ascii_lowercase();
+                    face.italic = v.starts_with("italic") || v.starts_with("oblique");
+                }
+                "unicode-range" => {
+                    for r in value.split(',') {
+                        let r = r.trim();
+                        let Some(hex) = r.strip_prefix("U+").or_else(|| r.strip_prefix("u+")) else { continue };
+                        let parse = |h: &str| u32::from_str_radix(h, 16).ok();
+                        let range = match hex.split_once('-') {
+                            Some((a, b)) => parse(a).zip(parse(b)),
+                            None if hex.contains('?') => parse(&hex.replace('?', "0")).zip(parse(&hex.replace('?', "F"))),
+                            None => parse(hex).map(|a| (a, a)),
+                        };
+                        if let Some((a, b)) = range {
+                            face.ranges.push((a.min(b), a.max(b)));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !face.family.is_empty() && !face.sources.is_empty() {
+            out.push(face);
+        }
+    }
+    out
 }
 
 /// The page's window, for @media: its size in CSS pixels.
@@ -353,6 +620,7 @@ pub fn sheet(css: &str, view: Viewport) -> Sheet {
     let toks = tokens(css);
     let mut s = Sheet::default();
     rules(&toks, view, &mut s, 0);
+    s.fonts = font_faces(css);
     s
 }
 

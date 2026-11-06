@@ -467,3 +467,278 @@ fn places_marks_as_harfbuzz_does() {
     let none = Font::parse(&data).unwrap().marks(None);
     assert!(none.is_empty() && none.on_base(1, 2).is_none() && !none.is_mark(1));
 }
+
+// ------------------------------------------------------------------------------------------------ web fonts
+
+/// A font's every glyph: its advance and its outline (as the commands it's drawn with).
+fn every_glyph(f: &Font) -> Vec<(u16, Vec<(u8, i32, i32, i32, i32)>)> {
+    struct Rec(Vec<(u8, i32, i32, i32, i32)>);
+    impl Outline for Rec {
+        fn move_to(&mut self, x: i32, y: i32) {
+            self.0.push((0, x, y, 0, 0));
+        }
+        fn line_to(&mut self, x: i32, y: i32) {
+            self.0.push((1, x, y, 0, 0));
+        }
+        fn quad_to(&mut self, cx: i32, cy: i32, x: i32, y: i32) {
+            self.0.push((2, cx, cy, x, y));
+        }
+        fn close(&mut self) {
+            self.0.push((3, 0, 0, 0, 0));
+        }
+    }
+    (0..f.glyph_count())
+        .map(|g| {
+            let mut r = Rec(Vec::new());
+            f.outline(g, &mut r);
+            (f.advance(g), r.0)
+        })
+        .collect()
+}
+
+#[test]
+fn a_woff_is_made_back_into_its_font() {
+    // (testdata's WOFF: fontTools's of the same font, its tables zlib-compressed.)
+    let ttf = atkinson();
+    let woff = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/AtkinsonHyperlegibleNext.woff")).unwrap();
+    let made = woff::sfnt(&woff, 1 << 24).expect("read");
+    let (a, b) = (Font::parse(&ttf).unwrap(), Font::parse(&made).unwrap());
+    assert_eq!(every_glyph(&a), every_glyph(&b));
+    assert_eq!(a.glyph_index('€'), b.glyph_index('€'));
+    // Damage anywhere: None or a font, never a crash; and too big for the cap, None.
+    assert!(woff::sfnt(&woff, 1000).is_none());
+    for i in (0..woff.len()).step_by(97) {
+        let mut d = woff.clone();
+        d[i] ^= 0x5A;
+        if let Some(s) = woff::sfnt(&d, 1 << 24) {
+            let _ = Font::parse(&s).map(|f| every_glyph(&f));
+        }
+    }
+}
+
+/// Brotli's simplest stream: its bytes stored as they are, in meta-blocks of up to 64 KiB.
+fn brotli_stored(data: &[u8]) -> Vec<u8> {
+    struct W {
+        out: Vec<u8>,
+        acc: u64,
+        n: u32,
+    }
+    impl W {
+        fn bits(&mut self, v: u64, n: u32) {
+            self.acc |= v << self.n;
+            self.n += n;
+            while self.n >= 8 {
+                self.out.push(self.acc as u8);
+                self.acc >>= 8;
+                self.n -= 8;
+            }
+        }
+        fn align(&mut self) {
+            if self.n > 0 {
+                self.bits(0, 8 - self.n);
+            }
+        }
+    }
+    let mut w = W { out: Vec::new(), acc: 0, n: 0 };
+    w.bits(0, 1); // a window of 64 KiB
+    for chunk in data.chunks(65536) {
+        w.bits(0, 1); // not the last
+        w.bits(0, 2); // four nibbles of length
+        w.bits(chunk.len() as u64 - 1, 16);
+        w.bits(1, 1); // stored
+        w.align();
+        w.out.extend_from_slice(chunk);
+    }
+    w.bits(1, 1); // the last, and empty
+    w.bits(1, 1);
+    w.align();
+    w.out
+}
+
+fn base128(v: u32, out: &mut Vec<u8>) {
+    let mut groups = vec![(v & 0x7F) as u8];
+    let mut v = v >> 7;
+    while v > 0 {
+        groups.push((v & 0x7F) as u8 | 0x80);
+        v >>= 7;
+    }
+    out.extend(groups.into_iter().rev());
+}
+
+fn u255(v: u16, out: &mut Vec<u8>) {
+    if v < 253 {
+        out.push(v as u8);
+    } else {
+        out.push(253);
+        out.extend_from_slice(&v.to_be_bytes());
+    }
+}
+
+/// A WOFF2 of a TrueType font: its tables (in the order they're stored), glyf and loca transformed as WOFF2 does
+/// (each point's move in the 4-byte form, simple glyphs' boxes left to be worked out) if `transform`.
+fn woff2_of(ttf: &[u8], transform: bool) -> Vec<u8> {
+    let n = u16_at(ttf, 4).unwrap() as usize;
+    let mut tables: Vec<([u8; 4], &[u8])> = Vec::new();
+    for i in 0..n {
+        let r = 12 + 16 * i;
+        let tag: [u8; 4] = ttf[r..r + 4].try_into().unwrap();
+        let (off, len) = (u32_at(ttf, r + 8).unwrap() as usize, u32_at(ttf, r + 12).unwrap() as usize);
+        tables.push((tag, &ttf[off..off + len]));
+    }
+    let find = |t: &[u8; 4]| tables.iter().find(|x| &x.0 == t).unwrap().1;
+    let (head, maxp, loca, glyf) = (find(b"head"), find(b"maxp"), find(b"loca"), find(b"glyf"));
+    let long = i16_at(head, 50).unwrap() == 1;
+    let glyphs = u16_at(maxp, 4).unwrap() as usize;
+    let at = |g: usize| if long { u32_at(loca, 4 * g).unwrap() as usize } else { 2 * u16_at(loca, 2 * g).unwrap() as usize };
+    // The transformed glyf's streams.
+    let (mut contours, mut points, mut flags, mut glyph_s, mut composite, mut instr) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut bitmap = vec![0u8; 4 * glyphs.div_ceil(32)];
+    let mut boxes = Vec::new();
+    for g in 0..glyphs {
+        let d = &glyf[at(g)..at(g + 1)];
+        if d.is_empty() {
+            contours.extend_from_slice(&0i16.to_be_bytes());
+            continue;
+        }
+        let nc = i16_at(d, 0).unwrap();
+        contours.extend_from_slice(&nc.to_be_bytes());
+        if nc < 0 {
+            let mut o = 10;
+            let mut more = true;
+            let mut has_instr = false;
+            while more {
+                let f = u16_at(d, o).unwrap();
+                let len = 4 + if f & 1 != 0 { 4 } else { 2 } + if f & 8 != 0 { 2 } else if f & 0x40 != 0 { 4 } else if f & 0x80 != 0 { 8 } else { 0 };
+                composite.extend_from_slice(&d[o..o + len]);
+                o += len;
+                more = f & 0x20 != 0;
+                has_instr |= f & 0x100 != 0;
+            }
+            bitmap[g >> 3] |= 0x80 >> (g & 7);
+            boxes.extend_from_slice(&d[2..10]);
+            if has_instr {
+                let len = u16_at(d, o).unwrap();
+                u255(len, &mut glyph_s);
+                instr.extend_from_slice(&d[o + 2..o + 2 + len as usize]);
+            }
+            continue;
+        }
+        let nc = nc as usize;
+        let ends: Vec<u16> = (0..nc).map(|i| u16_at(d, 10 + 2 * i).unwrap()).collect();
+        let total = *ends.last().unwrap() as usize + 1;
+        let mut prev = 0usize;
+        for &e in &ends {
+            u255((e as usize + 1 - prev) as u16, &mut points);
+            prev = e as usize + 1;
+        }
+        let il = u16_at(d, 10 + 2 * nc).unwrap() as usize;
+        let mut o = 12 + 2 * nc;
+        let code = &d[o..o + il];
+        o += il;
+        let mut fl = Vec::with_capacity(total);
+        while fl.len() < total {
+            let f = d[o];
+            o += 1;
+            fl.push(f);
+            if f & 8 != 0 {
+                let r = d[o];
+                o += 1;
+                for _ in 0..r {
+                    fl.push(f);
+                }
+            }
+        }
+        let mut read = |short: u8, same: u8| -> Vec<i32> {
+            fl.iter()
+                .map(|&f| {
+                    if f & short != 0 {
+                        let v = d[o] as i32;
+                        o += 1;
+                        if f & same != 0 { v } else { -v }
+                    } else if f & same != 0 {
+                        0
+                    } else {
+                        let v = i16_at(d, o).unwrap() as i32;
+                        o += 2;
+                        v
+                    }
+                })
+                .collect()
+        };
+        let xs = read(2, 0x10);
+        let ys = read(4, 0x20);
+        for i in 0..total {
+            let (dx, dy) = (xs[i], ys[i]);
+            let flag = 124 + (dx >= 0) as u8 + 2 * (dy >= 0) as u8;
+            flags.push(flag | if fl[i] & 1 == 0 { 0x80 } else { 0 });
+            glyph_s.extend_from_slice(&(dx.unsigned_abs() as u16).to_be_bytes());
+            glyph_s.extend_from_slice(&(dy.unsigned_abs() as u16).to_be_bytes());
+        }
+        u255(il as u16, &mut glyph_s);
+        instr.extend_from_slice(code);
+    }
+    let mut bbox_s = bitmap;
+    bbox_s.extend_from_slice(&boxes);
+    let mut tglyf = Vec::new();
+    tglyf.extend_from_slice(&0u16.to_be_bytes());
+    tglyf.extend_from_slice(&0u16.to_be_bytes());
+    tglyf.extend_from_slice(&(glyphs as u16).to_be_bytes());
+    tglyf.extend_from_slice(&(long as u16).to_be_bytes());
+    for s in [&contours, &points, &flags, &glyph_s, &composite, &bbox_s, &instr] {
+        tglyf.extend_from_slice(&(s.len() as u32).to_be_bytes());
+    }
+    for s in [&contours, &points, &flags, &glyph_s, &composite, &bbox_s, &instr] {
+        tglyf.extend_from_slice(s);
+    }
+    // The directory and the stream: each table as it is, or glyf transformed and loca made back from it.
+    let mut dir = Vec::new();
+    let mut stream = Vec::new();
+    for (tag, data) in &tables {
+        let glyf_or_loca = tag == b"glyf" || tag == b"loca";
+        // (Each tag written out; glyf and loca as they are are transform version 3.)
+        dir.push(if glyf_or_loca && !transform { 63 | 0xC0 } else { 63 });
+        dir.extend_from_slice(tag);
+        base128(data.len() as u32, &mut dir);
+        if glyf_or_loca && transform {
+            let t: &[u8] = if tag == b"glyf" { &tglyf } else { &[] };
+            base128(t.len() as u32, &mut dir);
+            stream.extend_from_slice(t);
+        } else {
+            stream.extend_from_slice(data);
+        }
+    }
+    let packed = brotli_stored(&stream);
+    let mut out = Vec::new();
+    out.extend_from_slice(b"wOF2");
+    out.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+    out.extend_from_slice(&0u32.to_be_bytes()); // length
+    out.extend_from_slice(&(tables.len() as u16).to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&(ttf.len() as u32).to_be_bytes());
+    out.extend_from_slice(&(packed.len() as u32).to_be_bytes());
+    out.extend_from_slice(&[0; 24]);
+    out.extend_from_slice(&dir);
+    out.extend_from_slice(&packed);
+    out
+}
+
+#[test]
+fn a_woff2_is_made_back_into_its_font() {
+    let ttf = atkinson();
+    let a = Font::parse(&ttf).unwrap();
+    for transform in [false, true] {
+        let w = woff2_of(&ttf, transform);
+        let made = woff::sfnt(&w, 1 << 24).expect("read");
+        let b = Font::parse(&made).expect("a font");
+        assert_eq!(every_glyph(&a), every_glyph(&b), "transformed: {transform}");
+        assert_eq!(b.metrics.units_per_em, 1000);
+        // Damage anywhere: never a crash.
+        for i in (0..w.len()).step_by(211) {
+            let mut d = w.clone();
+            d[i] ^= 0xA5;
+            if let Some(s) = woff::sfnt(&d, 1 << 24) {
+                let _ = Font::parse(&s).map(|f| every_glyph(&f));
+            }
+        }
+    }
+}

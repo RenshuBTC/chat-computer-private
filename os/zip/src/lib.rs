@@ -19,6 +19,9 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+mod brotli;
+pub use brotli::brotli;
+
 #[cfg(test)]
 mod tests;
 

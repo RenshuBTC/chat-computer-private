@@ -21,6 +21,7 @@ const MOST_FORCED: u32 = 40;
 pub struct LayoutInputs {
     pub ua: Arc<Sheet>,
     pub author: Arc<Vec<Sheet>>,
+    pub fonts: Arc<Vec<crate::style::WebFont>>,
     /// Which element shows which picture (by the page's resource), and each resource's size, if it's a picture
     /// that has come.
     pub picture_of: Vec<(NodeId, usize)>,
@@ -100,7 +101,7 @@ pub fn fresh_layout(vm: &mut Vm) {
     let (w, ht, dpr) = h.view;
     let dpr = if dpr > 0.0 { dpr } else { 1.0 };
     let view = Viewport { width: w, height: ht };
-    let styles = style::compute(&h.doc, &Sheets { ua: &inputs.ua, author: &inputs.author }, view, dpr);
+    let styles = style::compute(&h.doc, &Sheets { ua: &inputs.ua, author: &inputs.author, fonts: &inputs.fonts }, view, dpr);
     let mut tree = Tree::build(&h.doc, &styles, &mut Picker { of: &inputs.picture_of });
     let laid = Layout::new(&mut tree, text::Type::shared(), &SizesOf(&inputs.sizes), w * dpr, ht * dpr, dpr).run();
     h.rects = rects_of(&laid, &h.doc, w * dpr, dpr);

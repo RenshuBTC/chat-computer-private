@@ -29,7 +29,63 @@ fn random_u64() -> u64 {
     z ^ (z >> 31)
 }
 
+/// The window's named properties (HTML's): an element with an id, or an embed, form, img or object with a name, is
+/// a global of that name, unless the window has one of its own or its prototype does. They're a proxy in the window's
+/// prototype chain, between Window.prototype and EventTarget.prototype, as WebIDL's WindowProperties object is.
+fn named_properties(vm: &mut Vm) {
+    let wp = host_ref(vm).proto("Window").expect("made");
+    let above = vm.heap.get(wp).proto;
+    let target = vm.alloc(above, js::object::Class::Ordinary);
+    let handler = vm.new_object();
+    method(vm, handler, "has", 2, named_has);
+    method(vm, handler, "get", 3, named_get);
+    let proxy = vm.alloc(None, js::object::Class::Proxy(Some((target, handler)), 0));
+    vm.heap.get_mut(wp).proto = Some(proxy);
+}
+
+/// The element a window's named property `name` stands for.
+fn named_element(vm: &Vm, name: &str) -> Option<NodeId> {
+    if name.is_empty() {
+        return None;
+    }
+    let d = dom::doc(vm);
+    d.descendants(0).find(|&n| {
+        d.element(n).is_some_and(|e| {
+            e.attr("id") == Some(name) || (matches!(e.name.as_str(), "embed" | "form" | "img" | "object") && e.attr("name") == Some(name))
+        })
+    })
+}
+
+fn named_has(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    let (Some(Value::Obj(t)), Some(k)) = (args.first(), args.get(1)) else { return Ok(Value::Bool(false)) };
+    let key = vm.to_key(k)?;
+    if vm.has_property(*t, key)? {
+        return Ok(Value::Bool(true));
+    }
+    let found = match k {
+        Value::Str(s) => named_element(vm, &s.to_rust()).is_some(),
+        _ => false,
+    };
+    Ok(Value::Bool(found))
+}
+
+fn named_get(vm: &mut Vm, _this: &Value, args: &[Value], _f: Gc) -> R {
+    let (Some(Value::Obj(t)), Some(k)) = (args.first(), args.get(1)) else { return Ok(Value::Undefined) };
+    let receiver = args.get(2).cloned().unwrap_or(Value::Obj(*t));
+    let key = vm.to_key(k)?;
+    if vm.has_property(*t, key)? {
+        return vm.get(*t, key, &receiver);
+    }
+    if let Value::Str(s) = k
+        && let Some(n) = named_element(vm, &s.to_rust())
+    {
+        return Ok(wrap(vm, n));
+    }
+    Ok(Value::Undefined)
+}
+
 pub fn init(vm: &mut Vm) {
+    named_properties(vm);
     let w = host_ref(vm).window;
     // (window and top can't be changed; self, frames and parent can be replaced, as a script's own `let frames`
     // does.)
@@ -1199,6 +1255,10 @@ pub fn styled_value(vm: &mut Vm, n: NodeId, prop: &str) -> Option<String> {
         Size::None => String::from("none"),
         _ => String::from("auto"),
     };
+    // (A custom property: its value worked out, var()s in it replaced; none, if it's invalid or not there.)
+    if prop.starts_with("--") {
+        return Some(st.custom.get(prop).map_or(String::new(), |t| crate::css::serialize(t)));
+    }
     // (The sides' order in the style: top, right, bottom, left.)
     let parts: Vec<&str> = prop.split('-').collect();
     Some(match prop {

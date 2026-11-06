@@ -46,7 +46,7 @@ impl Shown for NoPictures {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct InkKey {
     text: String,
-    face: u8,
+    face: u16,
     size: i32,
     line: i32,
 }

@@ -292,6 +292,10 @@ pub struct Laid {
 /// What's known of the page's pictures: the `n`th's size in pixels, once it has come.
 pub trait Sizes {
     fn size(&self, n: usize) -> Option<(u32, u32)>;
+    /// Its own size as CSS sizes it: an SVG may have no width or height of its own, only a ratio, or neither.
+    fn intrinsic(&self, n: usize) -> Option<picture::Intrinsic> {
+        self.size(n).map(|(w, h)| picture::Intrinsic::sized(w, h))
+    }
     /// The picture fetched for an address a style sheet gives (a background's url()), if it's asked for.
     fn image(&self, _url: &str) -> Option<usize> {
         None
@@ -580,29 +584,49 @@ impl<'a> Layout<'a> {
         let s = self.tree.boxes[b].style.clone();
         let dpr = self.dpr;
         let content = self.tree.boxes[b].content.clone();
-        let natural: Option<(f32, f32)> = match &content {
-            Content::Image { image: Some(n), .. } => self.sizes.size(*n).map(|(w, h)| (w as f32 * dpr, h as f32 * dpr)),
+        // Its own width, height and ratio (a picture's, at its density; an SVG may have only a ratio, or nothing).
+        let own: Option<(Option<f32>, Option<f32>, Option<f32>)> = match &content {
+            Content::Image { image: Some(n), density, .. } => self.sizes.intrinsic(*n).map(|o| {
+                let k = dpr / if *density > 0.0 { *density } else { 1.0 };
+                (o.width.map(|w| w * k), o.height.map(|h| h * k), o.ratio.filter(|r| *r > 0.0))
+            }),
             Content::Image { .. } => None,
-            Content::Control(c) => Some(self.control_size(b, c.clone())),
+            // (A field doesn't keep its shape: its height is its line's, however wide it's made.)
+            Content::Control(c) => {
+                let (w, h) = self.control_size(b, c.clone());
+                Some((Some(w), Some(h), None))
+            }
             _ => None,
         };
-        // (A picture keeps its shape; a field doesn't: its height is its line's, however wide it's made.)
-        let shaped = !matches!(content, Content::Control(_));
-        let ratio = s.aspect_ratio.or(natural.filter(|(w, h)| shaped && *w > 0.0 && *h > 0.0).map(|(w, h)| w / h));
+        let (nw, nh, nr) = own.unwrap_or((None, None, None));
+        // (aspect-ratio's, unless it says auto first and the picture has a ratio of its own.)
+        let css_ratio = s.aspect_ratio.filter(|_| !(s.aspect_auto && nr.is_some()));
+        let ratio = css_ratio.or(nr);
         let w = s.width.len().filter(|l| !l.has_pct() || cb_w > 0.0).map(|l| self.content_from(b, l, cb_w, true));
         let h = s.height.len().filter(|l| !l.has_pct() || cb_h.is_some()).map(|l| self.content_from(b, l, cb_h.unwrap_or(0.0), false));
         let (w, h) = match (w, h, ratio) {
             (Some(w), Some(h), _) => (w, h),
             (Some(w), None, Some(r)) => (w, w / r),
             (None, Some(h), Some(r)) => (h * r, h),
-            (Some(w), None, None) => (w, natural.map_or(150.0 * dpr, |n| n.1)),
-            (None, Some(h), None) => (natural.map_or(300.0 * dpr, |n| n.0), h),
-            (None, None, _) => match natural {
-                Some(n) => n,
+            (Some(w), None, None) => (w, nh.unwrap_or(150.0 * dpr)),
+            (None, Some(h), None) => (nw.unwrap_or(300.0 * dpr), h),
+            (None, None, _) => match own {
+                // Its own width; its height its own, unless aspect-ratio says otherwise, else from its ratio.
+                Some((Some(w), Some(h), _)) => (w, css_ratio.map_or(h, |r| w / r)),
+                Some((Some(w), None, _)) => (w, ratio.map_or(150.0 * dpr, |r| w / r)),
+                Some((None, Some(h), _)) => (ratio.map_or(300.0 * dpr, |r| h * r), h),
+                // A ratio and no size (an SVG with only a viewBox): as wide as there's room for (CSS 2.1's
+                // suggestion, which Chrome follows), or 300px where the room isn't known; else 300 by 150.
+                Some((None, None, Some(r))) => {
+                    let room = cb_w - self.tree.boxes[b].margin[1] - self.tree.boxes[b].margin[3] - self.frame_w(b);
+                    let w = if cb_w > 0.0 { room.max(0.0) } else { 300.0 * dpr };
+                    (w, w / r)
+                }
+                Some((None, None, None)) => (300.0 * dpr, 150.0 * dpr),
                 // (A picture not here yet, nor sized: nothing, as a browser shows a picture that hasn't come, but
                 // its words when it can't be shown at all.)
                 None => match &content {
-                    Content::Image { image: None, alt } if !alt.is_empty() => {
+                    Content::Image { image: None, alt, .. } if !alt.is_empty() => {
                         let face = face_of(&s);
                         let w = self.measure(alt, face, s.font_size);
                         (w, s.line_px())
@@ -3129,40 +3153,46 @@ impl<'a> Layout<'a> {
             None => self.area(b, origin).0,
         };
         let (ca, crad) = painting.unwrap_or_else(|| self.area(b, effects::nth(&l.clips, i, BoxArea::Border)));
-        let (image, natural) = match img {
-            Image::Url(u) => {
+        // The picture's own width, height and ratio (an SVG may have only a ratio, or nothing; a gradient has none).
+        let (image, (own_w, own_h, ratio)) = match img {
+            Image::Url(u, res) => {
                 let n = self.sizes.image(u)?;
-                let (w, h) = self.sizes.size(n)?;
-                (Tile::Picture(n), Some((w as f32 * self.dpr, h as f32 * self.dpr)))
+                let o = self.sizes.intrinsic(n)?;
+                let k = self.dpr / if *res > 0.0 { *res } else { 1.0 };
+                (Tile::Picture(n), (o.width.filter(|w| *w > 0.0).map(|w| w * k), o.height.filter(|h| *h > 0.0).map(|h| h * k), o.ratio.filter(|r| *r > 0.0)))
             }
-            Image::Gradient(g) => (Tile::Gradient(g.clone()), None),
+            Image::Gradient(g) => (Tile::Gradient(g.clone()), (None, None, None)),
         };
-        let natural = natural.filter(|&(w, h)| w > 0.0 && h > 0.0);
         let size = effects::nth(&l.sizes, i, BgSize::Sized(None, None));
         let (auto_w, auto_h) = match size {
             BgSize::Sized(a, b) => (a.is_none(), b.is_none()),
             _ => (false, false),
         };
+        // As big as fits (contain) or covers (cover) the area, in its ratio.
+        let fit = |cover: bool, r: f32| {
+            let w = if cover { pa.w.max(pa.h * r) } else { pa.w.min(pa.h * r) };
+            (w, w / r)
+        };
         let (mut w, mut h) = match size {
-            BgSize::Cover | BgSize::Contain => match natural {
-                Some((iw, ih)) => {
-                    let k = if size == BgSize::Cover { (pa.w / iw).max(pa.h / ih) } else { (pa.w / iw).min(pa.h / ih) };
-                    (iw * k, ih * k)
-                }
+            BgSize::Cover | BgSize::Contain => match ratio {
+                Some(r) => fit(size == BgSize::Cover, r),
                 None => (pa.w, pa.h),
             },
-            BgSize::Sized(wl, hl) => {
-                let (wv, hv) = (wl.map(|x| x.resolve(pa.w)), hl.map(|x| x.resolve(pa.h)));
-                match (wv, hv, natural) {
+            // The rest as CSS Images' default sizing has it: a side not given from the other and the ratio, else
+            // the picture's own, else the area's; neither given: its own size, else a side and its ratio, else as
+            // contain (a ratio alone), else the area.
+            BgSize::Sized(wl, hl) => match (wl.map(|x| x.resolve(pa.w)), hl.map(|x| x.resolve(pa.h))) {
+                (Some(w), Some(h)) => (w, h),
+                (Some(w), None) => (w, ratio.map(|r| w / r).or(own_h).unwrap_or(pa.h)),
+                (None, Some(h)) => (ratio.map(|r| h * r).or(own_w).unwrap_or(pa.w), h),
+                (None, None) => match (own_w, own_h, ratio) {
                     (Some(w), Some(h), _) => (w, h),
-                    (Some(w), None, Some((iw, ih))) => (w, w * ih / iw),
-                    (None, Some(h), Some((iw, ih))) => (h * iw / ih, h),
-                    (None, None, Some((iw, ih))) => (iw, ih),
-                    (Some(w), None, None) => (w, pa.h),
-                    (None, Some(h), None) => (pa.w, h),
+                    (Some(w), None, r) => (w, r.map_or(pa.h, |r| w / r)),
+                    (None, Some(h), r) => (r.map_or(pa.w, |r| h * r), h),
+                    (None, None, Some(r)) => fit(false, r),
                     (None, None, None) => (pa.w, pa.h),
-                }
-            }
+                },
+            },
         };
         let (rx, ry) = effects::nth(&l.repeats, i, (Repeat::Repeat, Repeat::Repeat));
         // round: as many whole tiles as fit best, stretched to fill (the other side kept in proportion if it's auto).
@@ -3304,7 +3334,7 @@ impl<'a> Layout<'a> {
         }
         if let Some(m) = s.mask.as_ref().filter(|m| m.any()) {
             // (A mask that's an SVG <mask> in the page isn't read: it's left unmasked.)
-            if !m.images.iter().flatten().any(|i| matches!(i, Image::Url(u) if u.starts_with('#') || u.contains(".svg#"))) {
+            if !m.images.iter().flatten().any(|i| matches!(i, Image::Url(u, _) if u.starts_with('#') || u.contains(".svg#"))) {
                 let mut layers = Vec::new();
                 for i in (0..m.images.len()).rev() {
                     let paints = match m.images.get(i) {

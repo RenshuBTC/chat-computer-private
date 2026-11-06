@@ -343,8 +343,14 @@ impl Painter {
                         // (The picture made the tile's size in whole pixels; each pixel of the tiles takes the one
                         // its place in its tile falls on.)
                         let (tw, th) = (num::round(t.w).max(1.0) as u32, num::round(t.h).max(1.0) as u32);
-                        if let Some(px) = self.scaled_picture(*n, tw, th, *pixelated, pictures) {
-                            picture_tiles(c, &area, px, t, (tw, th), st, *repeat, clip);
+                        if (tw as u64) * (th as u64) <= 16 << 20 {
+                            if let Some(px) = self.scaled_picture(*n, tw, th, *pixelated, pictures) {
+                                picture_tiles(c, &area, px, t, (tw, th), st, *repeat, clip);
+                            }
+                        } else if let Some((rgb, pw, ph)) = pictures.picture(*n) {
+                            // (A tile too big to make whole, as one a picture of an extreme ratio covers: its pixels
+                            // taken from the picture where they're drawn.)
+                            big_picture_tiles(c, &area, (rgb, pictures.alpha(*n), pw, ph), t, st, *repeat, clip);
                         }
                     }
                     Tile::Gradient(g) => {
@@ -1660,6 +1666,63 @@ fn picture_tiles(s: &mut Canvas, area: &Shape, px: &[u32], t: Rect, (tw, th): (u
             if alpha(color) == 0 {
                 continue;
             }
+            let cover = area.cover(x, y);
+            if cover > 0 {
+                s.put(x, y, color, cover);
+            }
+        }
+    }
+}
+
+/// Tiles too big to make whole: each pixel drawn sampled from the picture (bilinearly, premultiplied) where its place
+/// in its tile falls.
+fn big_picture_tiles(s: &mut Canvas, area: &Shape, (rgb, alpha, pw, ph): (&[u8], Option<&[u8]>, u32, u32), t: Rect, step: (f32, f32), repeat: (bool, bool), clip: Area) {
+    let a = area.area().intersect(&clip);
+    let (pw_, ph_) = (pw as usize, ph as usize);
+    if a.empty() || t.w <= 0.0 || t.h <= 0.0 || pw == 0 || ph == 0 || rgb.len() < pw_ * ph_ * 3 {
+        return;
+    }
+    let alpha = alpha.filter(|al| al.len() >= pw_ * ph_);
+    let get = |u: usize, v: usize| -> [f32; 4] {
+        let i = v * pw_ + u;
+        let a = alpha.map_or(255.0, |al| al[i] as f32);
+        [rgb[i * 3] as f32 * a, rgb[i * 3 + 1] as f32 * a, rgb[i * 3 + 2] as f32 * a, a]
+    };
+    for y in a.y..a.b {
+        let mut v = y as f32 + 0.5 - t.y;
+        if repeat.1 {
+            v -= num::floor(v / step.1) * step.1;
+        }
+        if v < 0.0 || v >= t.h {
+            continue;
+        }
+        let fy = (v / t.h * ph as f32 - 0.5).clamp(0.0, (ph - 1) as f32);
+        let (y0, wy) = (num::floor(fy) as usize, fy - num::floor(fy));
+        let y1 = (y0 + 1).min(ph_ - 1);
+        for x in a.x..a.r {
+            let mut u = x as f32 + 0.5 - t.x;
+            if repeat.0 {
+                u -= num::floor(u / step.0) * step.0;
+            }
+            if u < 0.0 || u >= t.w {
+                continue;
+            }
+            let fx = (u / t.w * pw as f32 - 0.5).clamp(0.0, (pw - 1) as f32);
+            let (x0, wx) = (num::floor(fx) as usize, fx - num::floor(fx));
+            let x1 = (x0 + 1).min(pw_ - 1);
+            let (p00, p10, p01, p11) = (get(x0, y0), get(x1, y0), get(x0, y1), get(x1, y1));
+            let mut c = [0.0f32; 4];
+            for k in 0..4 {
+                let top = p00[k] + (p10[k] - p00[k]) * wx;
+                let bottom = p01[k] + (p11[k] - p01[k]) * wx;
+                c[k] = top + (bottom - top) * wy;
+            }
+            let al = c[3];
+            if al <= 0.0 {
+                continue;
+            }
+            let ch = |v: f32| ((v / al) + 0.5).clamp(0.0, 255.0) as u32;
+            let color = ((al + 0.5).clamp(0.0, 255.0) as u32) << 24 | ch(c[0]) << 16 | ch(c[1]) << 8 | ch(c[2]);
             let cover = area.cover(x, y);
             if cover > 0 {
                 s.put(x, y, color, cover);

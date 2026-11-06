@@ -15,7 +15,8 @@ use alloc::vec::Vec;
 /// A background or mask layer's picture: an address's (made whole), or a gradient.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Image {
-    Url(String),
+    /// A picture's address, and its resolution (image-set's: its size in CSS pixels is its own divided by it).
+    Url(String, f32),
     Gradient(Arc<Gradient>),
 }
 
@@ -307,19 +308,55 @@ fn angle(v: &[Tok]) -> Option<f32> {
 pub fn image(v: &[Tok], current: Color, u: &Units) -> Option<Option<Image>> {
     match trim(v) {
         [Tok::Ident(i)] if i.eq_ignore_ascii_case("none") => Some(None),
-        [Tok::Url(a)] => Some(Some(Image::Url(a.clone()))),
+        [Tok::Url(a)] => Some(Some(Image::Url(a.clone(), 1.0))),
         _ => {
             let (f, inner) = function(v)?;
             match f {
                 "url" | "src" => match trim(inner) {
-                    [Tok::Str(a), ..] => Some(Some(Image::Url(a.clone()))),
+                    [Tok::Str(a), ..] => Some(Some(Image::Url(a.clone(), 1.0))),
                     _ => None,
                 },
                 "image-set" | "-webkit-image-set" => {
-                    // The first of its pictures (at 1x, as a page lists it first).
-                    let first = css::split_commas(inner).into_iter().next()?;
-                    let p = parts(first);
-                    image(p.first()?, current, u)
+                    // Its pictures of types that are read, each with its resolution (1x unless it says): of them,
+                    // the least that's at least the screen's, else the greatest, as Chrome picks.
+                    let mut options: Vec<(f32, Image)> = Vec::new();
+                    for c in css::split_commas(inner) {
+                        let p = parts(c);
+                        let img = match p.first().map(|t| trim(t)) {
+                            Some([Tok::Str(a)]) => Some(Image::Url(a.clone(), 1.0)),
+                            Some(t) => image(t, current, u).flatten(),
+                            None => None,
+                        };
+                        let Some(img) = img else { continue };
+                        let mut res = 1.0;
+                        let mut ok = true;
+                        for q in &p[1..] {
+                            match trim(q) {
+                                [Tok::Dimension(n, unit)] => match unit.as_str() {
+                                    "x" | "dppx" => res = *n,
+                                    "dpi" => res = *n / 96.0,
+                                    "dpcm" => res = *n * 2.54 / 96.0,
+                                    _ => ok = false,
+                                },
+                                [Tok::Function(f), rest @ ..] if f == "type" => {
+                                    if !matches!(trim(rest), [Tok::Str(t), Tok::CloseParen] if crate::srcset::type_supported(t)) {
+                                        ok = false;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if ok && res > 0.0 {
+                            options.push((res, img));
+                        }
+                    }
+                    options.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+                    let at = options.iter().position(|(r, _)| *r >= u.dpr).unwrap_or(options.len().checked_sub(1)?);
+                    let (res, img) = options.swap_remove(at);
+                    Some(Some(match img {
+                        Image::Url(a, _) => Image::Url(a, res),
+                        other => other,
+                    }))
                 }
                 "image" => image(css::split_commas(inner).into_iter().next()?, current, u),
                 _ if f.contains("gradient") => Some(gradient(f, inner, current, u).map(|g| Image::Gradient(Arc::new(g)))),

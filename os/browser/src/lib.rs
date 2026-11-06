@@ -18,6 +18,7 @@ pub mod num;
 pub mod page;
 pub mod paint;
 pub mod script;
+pub mod srcset;
 pub mod style;
 pub mod values;
 

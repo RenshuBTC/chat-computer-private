@@ -338,6 +338,38 @@ pub fn orient(p: Picture, orientation: u8) -> Picture {
     Picture { width: nw as u32, height: nh as u32, rgb }
 }
 
+/// A picture's own size as CSS sizes it: its width and height where it has them (a decoded picture always; an SVG where
+/// they're lengths), and its ratio (width over height) if it has one (an SVG's from its viewBox, without them).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Intrinsic {
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub ratio: Option<f32>,
+}
+
+impl Intrinsic {
+    /// A picture of pixels: its size, and their ratio.
+    pub fn sized(w: u32, h: u32) -> Intrinsic {
+        Intrinsic { width: Some(w as f32), height: Some(h as f32), ratio: (w > 0 && h > 0).then(|| w as f32 / h as f32) }
+    }
+}
+
+/// A picture's own size, as CSS sizes it, as it's shown: a photo turned as its camera says (as Chrome shows it).
+pub fn intrinsic(data: &[u8]) -> Option<Intrinsic> {
+    match format(data)? {
+        Format::Svg => svg::intrinsic(data).map(|(width, height, ratio)| Intrinsic { width, height, ratio }),
+        Format::Jpeg if jpeg::orientation(data) >= 5 => size(data).map(|(w, h)| Intrinsic::sized(h, w)),
+        _ => size(data).map(|(w, h)| Intrinsic::sized(w, h)),
+    }
+}
+
+/// The size a picture is shown at, from its header: a photo turned as its camera says; an SVG's own (its viewBox's,
+/// or 300 by 150, where it gives none).
+pub fn shown_size(data: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = size(data)?;
+    Some(if format(data) == Some(Format::Jpeg) && jpeg::orientation(data) >= 5 { (h, w) } else { (w, h) })
+}
+
 /// The size a picture says it is (before it's turned), from its header: for checking it, without decoding it.
 pub fn size(data: &[u8]) -> Option<(u32, u32)> {
     match format(data)? {

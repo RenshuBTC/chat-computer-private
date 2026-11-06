@@ -25,25 +25,39 @@ pub struct LayoutInputs {
     /// Which element shows which picture (by the page's resource), and each resource's size, if it's a picture
     /// that has come.
     pub picture_of: Vec<(NodeId, usize)>,
+    /// The densities of the pictures shown (from srcsets) that aren't 1.
+    pub densities: Vec<(NodeId, f32)>,
     pub sizes: Vec<Option<(u32, u32)>>,
+    /// Each picture's own size as CSS sizes it, where it isn't simply its pixels' (an SVG's).
+    pub own: Vec<Option<picture::Intrinsic>>,
 }
 
 /// A page's pictures by element, for the box tree.
 pub struct Picker<'a> {
     pub of: &'a [(NodeId, usize)],
+    pub densities: &'a [(NodeId, f32)],
 }
 
 impl Pictures for Picker<'_> {
     fn picture(&mut self, _doc: &Document, node: NodeId) -> Option<usize> {
         self.of.iter().find(|(n, _)| *n == node).map(|(_, r)| *r)
     }
+
+    fn density(&self, node: NodeId) -> f32 {
+        self.densities.iter().find(|(n, _)| *n == node).map_or(1.0, |(_, d)| *d)
+    }
 }
 
-struct SizesOf<'a>(&'a [Option<(u32, u32)>]);
+struct SizesOf<'a>(&'a [Option<(u32, u32)>], &'a [Option<picture::Intrinsic>]);
 
 impl Sizes for SizesOf<'_> {
     fn size(&self, n: usize) -> Option<(u32, u32)> {
         self.0.get(n).copied().flatten()
+    }
+
+    fn intrinsic(&self, n: usize) -> Option<picture::Intrinsic> {
+        let (w, h) = self.size(n)?;
+        Some(self.1.get(n).copied().flatten().unwrap_or(picture::Intrinsic::sized(w, h)))
     }
 }
 
@@ -102,8 +116,8 @@ pub fn fresh_layout(vm: &mut Vm) {
     let dpr = if dpr > 0.0 { dpr } else { 1.0 };
     let view = Viewport { width: w, height: ht };
     let styles = style::compute(&h.doc, &Sheets { ua: &inputs.ua, author: &inputs.author, fonts: &inputs.fonts }, view, dpr);
-    let mut tree = Tree::build(&h.doc, &styles, &mut Picker { of: &inputs.picture_of });
-    let laid = Layout::new(&mut tree, text::Type::shared(), &SizesOf(&inputs.sizes), w * dpr, ht * dpr, dpr).run();
+    let mut tree = Tree::build(&h.doc, &styles, &mut Picker { of: &inputs.picture_of, densities: &inputs.densities });
+    let laid = Layout::new(&mut tree, text::Type::shared(), &SizesOf(&inputs.sizes, &inputs.own), w * dpr, ht * dpr, dpr).run();
     h.rects = rects_of(&laid, &h.doc, w * dpr, dpr);
     h.styles = Some(Arc::new(styles));
     h.laid_version = h.doc.version;

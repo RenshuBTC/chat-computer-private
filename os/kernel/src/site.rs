@@ -1323,7 +1323,7 @@ fn key_names(p: crate::keyboard::Press) -> (String, String) {
 /// A picture's bytes came: decoded (at most PICTURE_SIDE a side, while the page's pictures take less than
 /// PICTURES_BYTES), its size given to the page.
 fn picture_came(page: &mut Page, pictures: &mut Pictures, bytes_used: &mut usize, i: usize, bytes: &[u8]) {
-    let Some((w, h)) = picture::size(bytes) else {
+    let Some((w, h)) = picture::shown_size(bytes) else {
         page.failed(i);
         return;
     };
@@ -1337,6 +1337,9 @@ fn picture_came(page: &mut Page, pictures: &mut Pictures, bytes_used: &mut usize
             let px = Arc::new(Pixels { rgb: p.rgb, alpha, width: p.width, height: p.height, natural: (w, h) });
             pictures.0[i] = Some(px.clone());
             page.picture_came(i, w, h);
+            if let Some(own) = picture::intrinsic(bytes) {
+                page.picture_own(i, own);
+            }
             page.picture_pixels(i, px);
         }
         Err(_) => page.failed(i),

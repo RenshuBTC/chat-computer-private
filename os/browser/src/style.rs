@@ -302,6 +302,8 @@ pub struct Style {
     pub clip: bool,
     pub z_index: Option<i32>,
     pub aspect_ratio: Option<f32>,
+    /// aspect-ratio: auto <ratio>: a picture's own ratio first, where it has one.
+    pub aspect_auto: bool,
     pub object_fit: ObjectFit,
     pub object_position: (Pos, Pos),
     pub flex_direction: FlexDirection,
@@ -620,6 +622,7 @@ impl Style {
             clip: false,
             z_index: None,
             aspect_ratio: None,
+            aspect_auto: false,
             object_fit: ObjectFit::Fill,
             object_position: (Pos::CENTER, Pos::CENTER),
             flex_direction: FlexDirection::Row,
@@ -2934,6 +2937,7 @@ fn apply_one(s: &mut Style, name: &str, v: &[Tok], c: &Ctx) {
                 [a, b, ..] if *a > 0.0 && *b > 0.0 => Some(a / b),
                 _ => None,
             };
+            s.aspect_auto = v.iter().any(|t| matches!(t, Tok::Ident(w) if w.eq_ignore_ascii_case("auto")));
         }
         "object-fit" => {
             if let Some(f) = ident(v).and_then(|w| ObjectFit::from_word(&w)) {

@@ -10,6 +10,7 @@ use crate::dom::{Data, Document, NodeId};
 use crate::html;
 use crate::layout::{Item, Laid, Layout, Paint, Rect, Sizes};
 use crate::script::{EventInit, Picker, Script, ScriptKind};
+use crate::srcset;
 use crate::style::{self, Sheets, Styles};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -52,6 +53,8 @@ pub struct Resource {
     /// Asked for (the kernel has started fetching it), come, or failed.
     pub asked: bool,
     pub state: State,
+    /// A picture's own size as CSS sizes it, where it isn't simply its pixels' (an SVG's).
+    pub own: Option<picture::Intrinsic>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -133,6 +136,12 @@ pub struct Page {
     sources: Vec<Source>,
     /// Each <img> (and the like) element's picture: (element, resource).
     picture_of: Vec<(NodeId, usize)>,
+    /// The densities of the pictures elements show (their srcset's candidates'), where they aren't 1.
+    densities: Vec<(NodeId, f32)>,
+    /// Pictures chosen, then not before they were fetched (marked failed, unless they're chosen again).
+    dropped: Vec<usize>,
+    /// The window pictures are chosen for (CSS pixels wide and high, device pixels to one).
+    view: (f32, f32, f32),
     /// What's laid out now, and for what width.
     laid: Option<Laid>,
     laid_for: (f32, f32, f32),
@@ -229,6 +238,11 @@ impl Sizes for Known<'_> {
         }
     }
 
+    fn intrinsic(&self, n: usize) -> Option<picture::Intrinsic> {
+        let (w, h) = self.size(n)?;
+        Some(self.resources[n].own.unwrap_or(picture::Intrinsic::sized(w, h)))
+    }
+
     fn image(&self, url: &str) -> Option<usize> {
         self.images.get(url).copied()
     }
@@ -249,6 +263,16 @@ impl Page {
     }
 
     fn make(url: Url, html_text: &str, scripting: bool, epoch: f64, view: (f32, f32, f32)) -> Page {
+        // (An XHTML document, .xht or .xhtml, is XML: its CDATA sections are just their text, as in its style sheets'
+        // "<![CDATA[ ... ]]>".)
+        let path = url.path.to_ascii_lowercase();
+        let unwrapped;
+        let html_text = if (path.ends_with(".xht") || path.ends_with(".xhtml")) && html_text.contains("<![CDATA[") {
+            unwrapped = html_text.replace("<![CDATA[", "").replace("]]>", "");
+            unwrapped.as_str()
+        } else {
+            html_text
+        };
         let doc = html::parse_with(html_text, scripting);
         let mut p = Page {
             url,
@@ -256,6 +280,9 @@ impl Page {
             resources: Vec::new(),
             sources: Vec::new(),
             picture_of: Vec::new(),
+            densities: Vec::new(),
+            dropped: Vec::new(),
+            view,
             laid: None,
             laid_for: (0.0, 0.0, 0.0),
             styles: None,
@@ -331,10 +358,30 @@ impl Page {
     }
 
     /// The style sheets (<style>, <link rel=stylesheet>) and pictures (<img>, <input type=image>, <video poster>)
-    /// the page has, in order (again after a script changes the page: what's been fetched kept).
+    /// the page has, in order (again after a script changes the page: what's been fetched kept). A picture chosen
+    /// before and not now (another of a srcset's, for another window), not yet asked for: not fetched.
     fn scan(&mut self) {
+        let before: Vec<usize> = self.picture_of.iter().map(|&(_, r)| r).collect();
+        self.scan_nodes();
+        for r in before {
+            if self.picture_of.iter().any(|&(_, k)| k == r) || self.style_pictures.values().any(|&k| k == r) {
+                continue;
+            }
+            let res = &mut self.resources[r];
+            if res.kind == Kind::Picture && res.url.is_some() && !res.asked {
+                res.asked = true;
+                res.state = State::Failed;
+                self.dropped.push(r);
+            }
+        }
+    }
+
+    fn scan_nodes(&mut self) {
+        // (The page's elements by id, made when an <svg> first needs them.)
+        let mut ids: Option<BTreeMap<String, NodeId>> = None;
         self.sources.clear();
         self.picture_of.clear();
+        self.densities.clear();
         self.sheets_stale = true;
         self.inputs_stale = true;
         // The page's nodes in order, and its shadow trees' (each after its host), with the tree each is in.
@@ -422,6 +469,19 @@ impl Page {
                     // (Its fills and strokes as the page's style sheets give them, where they say other than its text.)
                     let (color, paints) = self.svg_look(n);
                     let mut text = self.doc.outer_html_setting(n, &|m| paints.iter().filter(|p| p.0 == m).map(|p| (p.1, p.2.clone())).collect());
+                    // (What it refers to that's elsewhere in the page, as an icon's <use> does a sprite's <symbol>:
+                    // put in it, in a <defs>, as it's drawn on its own.)
+                    let outside = self.svg_outside_refs(n, &mut ids);
+                    if !outside.is_empty()
+                        && let Some(end) = tag_end(&text)
+                    {
+                        let mut defs = String::from("<defs>");
+                        for t in outside {
+                            defs.push_str(&self.doc.outer_html(t));
+                        }
+                        defs.push_str("</defs>");
+                        text.insert_str(end + 1, &defs);
+                    }
                     // (currentColor: the colour the page gives the element, unless it says its own.)
                     if !e.has_attr("color")
                         && let Some(c) = color
@@ -491,11 +551,11 @@ impl Page {
     /// An <img> (or the like)'s picture: the resource it shows (fetched once for all that show it).
     fn picture_element(&mut self, n: NodeId) {
         let Some(e) = self.doc.element(n) else { return };
-        let address = match e.name.as_str() {
-            "video" => e.attr("poster").map(String::from),
-            _ => picture_address(e.attr("src"), e.attr("srcset"), e.attr("data-src")),
+        let chosen = match e.name.as_str() {
+            "video" => e.attr("poster").map(|p| (String::from(p), 1.0)),
+            _ => self.choose_picture(n),
         };
-        let Some(address) = address else { return };
+        let Some((address, density)) = chosen else { return };
         if self.picture_of.len() >= MOST_PICTURES {
             return;
         }
@@ -511,9 +571,16 @@ impl Page {
                 }),
             }
         } else if let Ok(u) = self.url.join(address.trim().split('#').next().unwrap_or("")) {
-            // (The same picture twice on a page: fetched once.)
+            // (The same picture twice on a page: fetched once. One chosen before, then not, and now again: fetched.)
             match self.resources.iter().position(|r| r.kind == Kind::Picture && r.url.as_ref() == Some(&u)) {
-                Some(i) => Some(i),
+                Some(i) => {
+                    if let Some(k) = self.dropped.iter().position(|&d| d == i) {
+                        self.dropped.swap_remove(k);
+                        self.resources[i].asked = false;
+                        self.resources[i].state = State::Waiting;
+                    }
+                    Some(i)
+                }
                 None => Some(self.add(Kind::Picture, Some(u), None)),
             }
         } else {
@@ -521,11 +588,67 @@ impl Page {
         };
         if let Some(r) = r {
             self.picture_of.push((n, r));
+            if density != 1.0 {
+                self.densities.push((n, density));
+            }
         }
     }
 
+    /// The picture an <img> shows, and its density: from the first <source> of its <picture> that suits the window
+    /// and is of a type that's read, else from its own srcset (its src the 1x candidate, where that has no 1x and no
+    /// widths), as the screen's density picks among them (srcset.rs); else its src. A src that's only a placeholder
+    /// (pages that load their pictures with a script put the real one in data-srcset or data-src) gives way to those.
+    fn choose_picture(&self, n: NodeId) -> Option<(String, f32)> {
+        let e = self.doc.element(n)?;
+        let view = Viewport { width: self.view.0, height: self.view.1 };
+        let dpr = if self.view.2 > 0.0 { self.view.2 } else { 1.0 };
+        if e.name == "img"
+            && let Some(p) = self.doc.parent(n)
+            && self.doc.name(p) == "picture"
+        {
+            for &c in self.doc.children(p) {
+                if c == n {
+                    break;
+                }
+                let Some(s) = self.doc.element(c).filter(|s| s.name == "source") else { continue };
+                let Some(set) = s.attr("srcset").filter(|v| !v.trim().is_empty()) else { continue };
+                if s.attr("media").is_some_and(|m| !css::media_matches(&css::tokens(m), view)) {
+                    continue;
+                }
+                if s.attr("type").is_some_and(|t| !t.trim().is_empty() && !srcset::type_supported(t)) {
+                    continue;
+                }
+                let candidates = srcset::parse(set);
+                if candidates.is_empty() {
+                    continue;
+                }
+                return srcset::pick(candidates, srcset::source_size(s.attr("sizes"), view), dpr);
+            }
+        }
+        let placeholder = |s: &str| s.trim().is_empty() || (s.trim_start().starts_with("data:") && s.len() < 200);
+        let src = e.attr("src").filter(|s| !s.trim().is_empty());
+        let mut candidates = e.attr("srcset").map(srcset::parse).unwrap_or_default();
+        if candidates.is_empty() && src.is_none_or(placeholder) {
+            candidates = e.attr("data-srcset").map(srcset::parse).unwrap_or_default();
+            if candidates.is_empty()
+                && let Some(d) = e.attr("data-src").filter(|d| !d.trim().is_empty())
+            {
+                return Some((String::from(d.trim()), 1.0));
+            }
+        }
+        if candidates.is_empty() {
+            return src.map(|s| (String::from(s.trim()), 1.0));
+        }
+        if let Some(s) = src.filter(|s| !placeholder(s))
+            && !candidates.iter().any(|c| c.width.is_some() || c.density.is_none_or(|d| d == 1.0))
+        {
+            candidates.push(srcset::Candidate { url: String::from(s.trim()), width: None, density: Some(1.0) });
+        }
+        srcset::pick(candidates, srcset::source_size(e.attr("sizes"), view), dpr)
+    }
+
     fn add(&mut self, kind: Kind, url: Option<Url>, inline: Option<Vec<u8>>) -> usize {
-        self.resources.push(Resource { kind, url, inline, asked: false, state: State::Waiting });
+        self.resources.push(Resource { kind, url, inline, asked: false, state: State::Waiting, own: None });
         self.resources.len() - 1
     }
 
@@ -608,7 +731,7 @@ impl Page {
         for st in all {
             for layers in [&st.bg, &st.mask].into_iter().flatten() {
                 for img in layers.images.iter().flatten() {
-                    if let crate::effects::Image::Url(u) = img
+                    if let crate::effects::Image::Url(u, _) = img
                         && !u.starts_with('#')
                         && !self.style_pictures.contains_key(u)
                         && !wanted.contains(u)
@@ -675,6 +798,18 @@ impl Page {
         }
     }
 
+    /// A picture's own size as CSS sizes it (an SVG's: its width and height only where they're lengths, its ratio
+    /// perhaps from its viewBox), after picture_came.
+    pub fn picture_own(&mut self, i: usize, own: picture::Intrinsic) {
+        if let Some(r) = self.resources.get_mut(i)
+            && r.own != Some(own)
+        {
+            r.own = Some(own);
+            self.changed = true;
+            self.inputs_stale = true;
+        }
+    }
+
     pub fn failed(&mut self, i: usize) {
         if let Some(r) = self.resources.get_mut(i) {
             if r.kind == Kind::Script {
@@ -702,6 +837,11 @@ impl Page {
     /// Lays the page out for a panel `w` by `h` device pixels (`dpr` device pixels a CSS pixel), if it isn't laid out
     /// for that already or something changed.
     pub fn lay_out(&mut self, ty: &Type, w: f32, h: f32, dpr: f32) -> &Laid {
+        // (Pictures chosen again for another window: their srcsets' sizes and their sources' media may say others.)
+        if dpr > 0.0 && (w / dpr, h / dpr, dpr) != self.view {
+            self.view = (w / dpr, h / dpr, dpr);
+            self.scan();
+        }
         let size_changed = self.laid_for != (w, h, dpr);
         if size_changed {
             self.styles = None;
@@ -723,7 +863,7 @@ impl Page {
                 }
             }
             let styles = self.styles.as_ref().expect("worked out above");
-            let mut tree = Tree::build(&self.doc, styles, &mut Picker { of: &self.picture_of });
+            let mut tree = Tree::build(&self.doc, styles, &mut Picker { of: &self.picture_of, densities: &self.densities });
             let laid = Layout::new(&mut tree, ty, &Known { resources: &self.resources, images: &self.style_pictures }, w, h, dpr).run();
             self.laid = Some(laid);
             self.laid_for = (w, h, dpr);
@@ -816,7 +956,8 @@ impl Page {
         let (w, ht, _) = h.view;
         self.parse_sheets(Viewport { width: w, height: ht });
         let sizes = self.resources.iter().map(|r| if let State::Picture(w, h) = r.state { Some((w, h)) } else { None }).collect();
-        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), fonts: self.web_fonts.clone(), picture_of: self.picture_of.clone(), sizes };
+        let own = self.resources.iter().map(|r| r.own).collect();
+        let inputs = crate::script::LayoutInputs { ua: self.ua.clone(), author: self.author.clone(), fonts: self.web_fonts.clone(), picture_of: self.picture_of.clone(), densities: self.densities.clone(), sizes, own };
         if let Some(s) = self.script.as_mut() {
             s.host().layout_inputs = Some(alloc::rc::Rc::new(inputs));
         }
@@ -910,6 +1051,65 @@ impl Page {
     /// What the page's style sheets say an <svg> is drawn with, beyond its own text: currentColor's colour, and the
     /// fills and strokes they give it (or it inherits from the page round it, where it says none of its own) and the
     /// elements inside it (each element's, as an attribute to set on it).
+    /// The elements an <svg> refers to (by href="#id", and url(#id) in its attributes) that are elsewhere in the page,
+    /// and those they refer to in turn (a sprite's <symbol>s, gradients in a hidden <svg>); `ids`: the page's elements
+    /// by id, made the first time they're needed.
+    fn svg_outside_refs(&self, n: NodeId, ids: &mut Option<BTreeMap<String, NodeId>>) -> Vec<NodeId> {
+        let refs_in = |root: NodeId, out: &mut Vec<String>| {
+            for m in self.doc.descendants(root) {
+                let Some(e) = self.doc.element(m) else { continue };
+                for (name, value) in &e.attrs {
+                    let v = value.trim();
+                    if (name == "href" || name == "xlink:href") && v.len() > 1 && v.starts_with('#') {
+                        out.push(String::from(&v[1..]));
+                    }
+                    let mut rest = v;
+                    while let Some(at) = rest.find("url(") {
+                        let inner = &rest[at + 4..];
+                        let close = inner.find(')').unwrap_or(inner.len());
+                        let id = inner[..close].trim().trim_matches(['\'', '"']);
+                        if let Some(id) = id.strip_prefix('#').filter(|i| !i.is_empty()) {
+                            out.push(String::from(id));
+                        }
+                        rest = &inner[close..];
+                    }
+                }
+            }
+        };
+        let mut wanted = Vec::new();
+        refs_in(n, &mut wanted);
+        if wanted.is_empty() {
+            return Vec::new();
+        }
+        let inside = |id: &str, root: NodeId| self.doc.descendants(root).any(|m| self.doc.element(m).and_then(|e| e.id()) == Some(id));
+        let ids = ids.get_or_insert_with(|| {
+            let mut map = BTreeMap::new();
+            for m in self.doc.descendants(0) {
+                if let Some(id) = self.doc.element(m).and_then(|e| e.id()) {
+                    map.entry(String::from(id)).or_insert(m);
+                }
+            }
+            map
+        });
+        let mut found: Vec<NodeId> = Vec::new();
+        let mut k = 0;
+        while k < wanted.len() && found.len() < 64 {
+            let id = wanted[k].clone();
+            k += 1;
+            if inside(&id, n) || found.iter().any(|&f| inside(&id, f)) {
+                continue;
+            }
+            let Some(&t) = ids.get(&id) else { continue };
+            // (Not something it's inside, nor what holds it.)
+            if self.doc.descendants(t).any(|m| m == n) {
+                continue;
+            }
+            found.push(t);
+            refs_in(t, &mut wanted);
+        }
+        found
+    }
+
     fn svg_look(&self, n: NodeId) -> (Option<u32>, Vec<(NodeId, &'static str, String)>) {
         let color = self.color_of(n);
         let mut paints = Vec::new();
@@ -1871,30 +2071,18 @@ fn brackets_closed(css: &str) -> bool {
     depth <= 0
 }
 
-/// The picture an <img> shows: its src, else the first of its srcset, else data-src (pages that load their
-/// pictures with a script put them there); a src that's only a placeholder gives way to the others.
-fn picture_address(src: Option<&str>, srcset: Option<&str>, data_src: Option<&str>) -> Option<String> {
-    let placeholder = |s: &str| s.trim().is_empty() || (s.starts_with("data:") && s.len() < 200);
-    if let Some(s) = src
-        && !placeholder(s)
-    {
-        return Some(String::from(s.trim()));
-    }
-    if let Some(set) = srcset {
-        // (Each candidate: an address, then its width or density.)
-        if let Some(first) = set.split(',').map(str::trim).find(|c| !c.is_empty()) {
-            let address = first.split_ascii_whitespace().next().unwrap_or("");
-            if !address.is_empty() {
-                return Some(String::from(address));
-            }
+/// Where an element's start tag ends in its HTML (its ">"; quotes minded).
+fn tag_end(html: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in html.char_indices() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, '>') => return Some(i),
+            _ => {}
         }
     }
-    if let Some(s) = data_src
-        && !s.trim().is_empty()
-    {
-        return Some(String::from(s.trim()));
-    }
-    src.map(|s| String::from(s.trim())).filter(|s| !s.is_empty())
+    None
 }
 
 /// A data: URL's bytes (base64 or percent-encoded).

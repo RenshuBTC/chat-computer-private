@@ -241,10 +241,130 @@ fn style_sheets_and_pictures_asked_for_in_order_and_a_picture_written_in_the_pag
         [
             (Sheet, Some("/s.css".into()), None),
             (Picture, None, Some(14)),
-            (Picture, Some("/big.png".into()), None),
+            (Picture, Some("/small.png".into()), None),
             (Picture, Some("/lazy.png".into()), None),
         ]
     );
+}
+
+#[test]
+fn srcsets_read_as_html_reads_them_and_a_candidate_picked_as_chrome_picks_it() {
+    use crate::css::Viewport;
+    use crate::srcset::{Candidate, parse, pick, source_size};
+    let c = |url: &str, width: Option<f32>, density: Option<f32>| Candidate { url: url.into(), width, density };
+    assert_eq!(parse("a.png 1x, b.png 2x"), [c("a.png", None, Some(1.0)), c("b.png", None, Some(2.0))]);
+    assert_eq!(parse(" a.jpg 400w,b.jpg  800w "), [c("a.jpg", Some(400.0), None), c("b.jpg", Some(800.0), None)]);
+    // An address with commas in it; one with no descriptor (1x); ones whose descriptors don't make sense, left out.
+    assert_eq!(parse("data:image/png;base64,AAA= 2x"), [c("data:image/png;base64,AAA=", None, Some(2.0))]);
+    assert_eq!(parse("a.png, b.png 1.5x"), [c("a.png", None, None), c("b.png", None, Some(1.5))]);
+    assert_eq!(parse("a.png 1x 2x, b.png 100w 2x, c.png 0w, d.png (x, y), e.png 2x"), [c("e.png", None, Some(2.0))]);
+    assert_eq!(parse("a.png 100w 50h, b.png 50h"), [c("a.png", Some(100.0), None)]);
+
+    // The least dense at least as dense as the screen; between two, the nearer by their geometric mean.
+    let x = || parse("s.jpg 1x, m.jpg 1.5x, l.jpg 2x");
+    assert_eq!(pick(x(), 0.0, 1.0), Some(("s.jpg".into(), 1.0)));
+    assert_eq!(pick(x(), 0.0, 1.6), Some(("m.jpg".into(), 1.5)));
+    assert_eq!(pick(x(), 0.0, 1.8), Some(("l.jpg".into(), 2.0)));
+    assert_eq!(pick(x(), 0.0, 3.0), Some(("l.jpg".into(), 2.0)));
+    // Widths: each one's density its width over the picture's size (500px here).
+    let w = || parse("a.jpg 400w, b.jpg 800w, c.jpg 1600w");
+    assert_eq!(pick(w(), 500.0, 1.0), Some(("b.jpg".into(), 1.6)));
+    assert_eq!(pick(w(), 500.0, 2.0), Some(("b.jpg".into(), 1.6)));
+    assert_eq!(pick(w(), 500.0, 2.5), Some(("c.jpg".into(), 3.2)));
+
+    // sizes: the first whose media condition matches, else 100vw.
+    let v = Viewport { width: 1000.0, height: 800.0 };
+    assert_eq!(source_size(Some("(max-width: 600px) 100vw, 50vw"), v), 500.0);
+    assert_eq!(source_size(Some("(min-width: 900px) calc(30vw - 2em), 100vw"), v), 268.0);
+    assert_eq!(source_size(Some("bogus, 300px"), v), 300.0);
+    assert_eq!(source_size(Some("(max-width: 500px) 50vw"), v), 1000.0);
+    assert_eq!(source_size(None, v), 1000.0);
+}
+
+#[test]
+fn a_picture_s_source_chosen_by_its_media_and_type_and_a_srcset_s_density_sizes_its_picture() {
+    let html = "<body style='margin:0'><picture><source srcset='/a.avif' type='image/avif'>\
+                <source srcset='/narrow.webp' media='(max-width: 400px)' type='image/webp'>\
+                <source srcset='/wide.webp 1x, /wide2.webp 2x' type='image/webp'><img src='/fallback.jpg'></picture>\
+                <img srcset='/hi.png 2x' src='/lo.png'><img srcset='/w400.png 400w, /w800.png 800w' sizes='200px'></body>";
+    let ty = Type::builtin();
+    for (w, dpr, want) in [
+        (600.0, 1.0, ["/wide.webp", "/lo.png", "/w400.png"]),
+        (300.0, 1.0, ["/narrow.webp", "/lo.png", "/w400.png"]),
+        (1200.0, 2.0, ["/wide2.webp", "/hi.png", "/w400.png"]),
+    ] {
+        let mut p = page(html);
+        p.lay_out(&ty, w, 800.0, dpr);
+        let mut asked = Vec::new();
+        while let Some((i, _, url, _)) = p.next_wanted() {
+            asked.push(url.map(|u| u.path).unwrap_or_default());
+            p.picture_came(i, 100, 50);
+        }
+        // (In the order they were first chosen: those chosen for the window the page was made for, first.)
+        asked.sort();
+        let mut want = want;
+        want.sort();
+        assert_eq!(asked, want, "{w} pixels wide, {dpr} to a CSS pixel");
+        // Each picture's size in CSS pixels: its own over its density (the 400w one's is 2, as the picture's 200px).
+        let l = p.lay_out(&ty, w, 800.0, dpr);
+        let pics: Vec<(f32, f32)> = l.items.iter().filter_map(|i| if let Paint::Picture { w, h, .. } = i.paint { Some((w / dpr, h / dpr)) } else { None }).collect();
+        let first = if dpr == 2.0 { (50.0, 25.0) } else { (100.0, 50.0) };
+        assert_eq!(pics, [first, first, (50.0, 25.0)], "{w} pixels wide, {dpr} to a CSS pixel");
+    }
+    // A window made narrower before the pictures were fetched: the narrow one's fetched, not the wide one.
+    let mut p = page(html);
+    p.lay_out(&ty, 600.0, 800.0, 1.0);
+    p.lay_out(&ty, 300.0, 800.0, 1.0);
+    let mut asked = Vec::new();
+    while let Some((_, _, url, _)) = p.next_wanted() {
+        asked.push(url.map(|u| u.path).unwrap_or_default());
+    }
+    asked.sort();
+    assert_eq!(asked, ["/lo.png", "/narrow.webp", "/w400.png"]);
+}
+
+#[test]
+fn an_svg_with_only_a_ratio_is_sized_as_css_says_in_a_background_and_in_an_img() {
+    let mut p = page("<body style='margin:0'><div style='width:100px;height:40px;background:url(/i.svg) no-repeat'></div>\
+                      <div style='width:200px;height:30px;background:url(/i.svg) 0 0/50px no-repeat'></div>\
+                      <div style='width:200px'><img src='/w.svg'></div><img src='/none.svg' style='display:block'></body>");
+    let ty = Type::builtin();
+    p.lay_out(&ty, 600.0, 400.0, 1.0);
+    for _ in 0..2 {
+        while let Some((i, _, url, _)) = p.next_wanted() {
+            p.picture_came(i, 300, 150);
+            let ratio = if url.is_some_and(|u| u.path == "/none.svg") { None } else { Some(2.0) };
+            p.picture_own(i, picture::Intrinsic { width: None, height: None, ratio });
+        }
+        p.lay_out(&ty, 600.0, 400.0, 1.0);
+    }
+    let l = p.lay_out(&ty, 600.0, 400.0, 1.0);
+    let tiles: Vec<(f32, f32)> = l.items.iter().filter_map(|i| if let Paint::Tiles { tile, .. } = &i.paint { Some((tile.w, tile.h)) } else { None }).collect();
+    // A ratio alone: as big as fits the box (as contain); a width given: the height from the ratio.
+    assert_eq!(tiles, [(80.0, 40.0), (50.0, 25.0)]);
+    // In an <img>: as wide as there's room for, in its ratio; with neither a size nor a ratio, 300 by 150.
+    let pics: Vec<(f32, f32)> = l.items.iter().filter_map(|i| if let Paint::Picture { w, h, .. } = i.paint { Some((w, h)) } else { None }).collect();
+    assert_eq!(pics, [(200.0, 100.0), (300.0, 150.0)]);
+}
+
+#[test]
+fn an_icon_s_use_of_a_sprite_elsewhere_in_the_page_carries_what_it_uses() {
+    let mut p = page("<body><svg style='display:none'><defs><linearGradient id='g'><stop offset='0' stop-color='red'/></linearGradient></defs>\
+                      <symbol id='star' viewBox='0 0 10 10'><path d='M0 0h10v10z' fill='url(#g)'/></symbol></svg>\
+                      <svg width='20' height='20'><use href='#star'/></svg><svg><use href='#nowhere'/></svg></body>");
+    let mut texts = Vec::new();
+    while let Some((_, _, _, inline)) = p.next_wanted() {
+        if let Some(b) = inline {
+            texts.push(String::from_utf8(b).unwrap());
+        }
+    }
+    // The icon: the symbol it uses, and the gradient the symbol uses, put in a <defs> of its own.
+    let icon = texts.iter().find(|t| t.contains("#star")).unwrap();
+    assert!(icon.contains("<defs><symbol id=\"star\""), "{icon}");
+    assert!(icon.to_ascii_lowercase().contains("<lineargradient id=\"g\""), "{icon}");
+    // What isn't in the page: nothing put in.
+    let lost = texts.iter().find(|t| t.contains("#nowhere")).unwrap();
+    assert!(!lost.contains("<defs>"), "{lost}");
 }
 
 fn scripted(html: &str) -> Page {

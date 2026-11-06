@@ -58,8 +58,11 @@ fn main() {
             (Kind::Sheet, Some(b)) => page.sheet_came(i, String::from_utf8_lossy(&b).into_owned()),
             (Kind::Picture, Some(b)) => match picture::decode(&b, 4000, 4000, [255, 255, 255]) {
                 Ok(p) => {
-                    let (w, h) = picture::size(&b).unwrap_or((p.width, p.height));
+                    let (w, h) = picture::shown_size(&b).unwrap_or((p.width, p.height));
                     page.picture_came(i, w, h);
+                    if let Some(own) = picture::intrinsic(&b) {
+                        page.picture_own(i, own);
+                    }
                     if pictures.0.len() <= i {
                         pictures.0.resize(i + 1, None);
                     }

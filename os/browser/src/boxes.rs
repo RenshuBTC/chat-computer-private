@@ -34,8 +34,9 @@ pub enum Content {
     Children,
     /// Words.
     Text(String),
-    /// A picture: its place in the page's list of pictures, and what it says it is (shown when it can't be).
-    Image { image: Option<usize>, alt: String },
+    /// A picture: its place in the page's list of pictures, what it says it is (shown when it can't be), and its
+    /// density (device pixels of the picture to a CSS pixel: its size in CSS pixels is its own divided by it).
+    Image { image: Option<usize>, alt: String, density: f32 },
     /// A form's field.
     Control(Control),
     /// A line break (<br>).
@@ -107,6 +108,10 @@ pub struct Tree {
 /// How a page's pictures are found: an element's picture's address, its place in the page's list.
 pub trait Pictures {
     fn picture(&mut self, doc: &Document, node: NodeId) -> Option<usize>;
+    /// The density of the picture an element shows (its srcset's candidate's), if it isn't 1.
+    fn density(&self, _node: NodeId) -> f32 {
+        1.0
+    }
 }
 
 impl Tree {
@@ -396,7 +401,11 @@ impl Builder<'_> {
         let name = el.name.as_str();
         // What shows something other than its children.
         let content = match name {
-            "img" => Content::Image { image: self.pictures.picture(self.doc, node), alt: String::from(el.attr("alt").unwrap_or("")) },
+            "img" => Content::Image {
+                image: self.pictures.picture(self.doc, node),
+                alt: String::from(el.attr("alt").unwrap_or("")),
+                density: self.pictures.density(node),
+            },
             "svg" | "video" | "canvas" | "iframe" | "embed" | "object" | "audio" | "math" => {
                 // (Their insides aren't drawn here: their place is kept, from their size; an <svg> is a picture, drawn
                 // from its own text, and a <canvas> one its scripts draw.)
@@ -405,7 +414,7 @@ impl Builder<'_> {
                     "svg" | "canvas" => self.pictures.picture(self.doc, node),
                     _ => None,
                 };
-                Content::Image { image, alt: String::new() }
+                Content::Image { image, alt: String::new(), density: 1.0 }
             }
             "br" => Content::Break,
             "input" => {
@@ -426,7 +435,11 @@ impl Builder<'_> {
                         Content::Control(Control::Button(words))
                     }
                     "checkbox" | "radio" => Content::Control(Control::Check { checked: el.has_attr("checked"), radio: kind == "radio" }),
-                    "image" => Content::Image { image: self.pictures.picture(self.doc, node), alt: String::from(el.attr("alt").unwrap_or("")) },
+                    "image" => Content::Image {
+                        image: self.pictures.picture(self.doc, node),
+                        alt: String::from(el.attr("alt").unwrap_or("")),
+                        density: self.pictures.density(node),
+                    },
                     "file" => Content::Control(Control::Button(String::from("Choose a file"))),
                     "range" | "color" => Content::Control(Control::Text { value: String::new(), placeholder: String::new(), password: false, size: 20 }),
                     _ => Content::Control(Control::Text {

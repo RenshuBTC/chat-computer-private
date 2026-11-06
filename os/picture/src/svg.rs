@@ -1359,6 +1359,25 @@ pub fn size(data: &[u8]) -> Option<(u32, u32)> {
     Some((((w + 0.5) as u32).max(1), ((h + 0.5) as u32).max(1)))
 }
 
+/// An SVG's own size as CSS sizes it (the outermost <svg>'s): its width and height where they're lengths (not
+/// percentages, not missing), and its ratio, from them, else from its viewBox.
+pub fn intrinsic(data: &[u8]) -> Option<(Option<f32>, Option<f32>, Option<f32>)> {
+    let text = core::str::from_utf8(data).ok()?;
+    let doc = parse(text);
+    let node = &doc.nodes[root(&doc)?];
+    let abs = |name: &str| node.attr(name).filter(|v| !v.trim().ends_with('%')).and_then(|v| length(v, 0.0, 16.0)).filter(|v| *v > 0.0);
+    let (w, h) = (abs("width"), abs("height"));
+    let ratio = match (w, h) {
+        (Some(w), Some(h)) => Some(w / h),
+        _ => node.attr("viewbox").and_then(|v| {
+            let mut n = Numbers::new(v);
+            let (_, _, vw, vh) = (n.number()?, n.number()?, n.number()?, n.number()?);
+            (vw > 0.0 && vh > 0.0).then_some(vw / vh)
+        }),
+    };
+    Some((w, h, ratio))
+}
+
 fn own_size(node: &Node) -> (f32, f32) {
     let abs = |name: &str| node.attr(name).filter(|v| !v.trim().ends_with('%')).and_then(|v| length(v, 0.0, 16.0)).filter(|v| *v > 0.0);
     let vb = node.attr("viewbox").and_then(|v| {
@@ -1400,7 +1419,13 @@ pub fn render(data: &[u8], width: u32, height: u32) -> Option<(Vec<u8>, u32, u32
     let (inner, vp) = viewbox(&doc.nodes[r], ow, oh);
     let st = p.style_of(r, &Style::initial(), vp);
     let m = m.then(&inner);
-    if st.display {
+    // (A viewBox of no width or no height draws nothing, as SVG has it.)
+    let empty_view = doc.nodes[r].attr("viewbox").is_some_and(|v| {
+        let mut n = Numbers::new(v);
+        let (_, _, vw, vh) = (n.number(), n.number(), n.number(), n.number());
+        vw == Some(0.0) || vh == Some(0.0)
+    });
+    if st.display && !empty_view {
         for c in doc.nodes[r].children.clone() {
             p.element(c, &st, m, st.opacity, vp, 1);
         }

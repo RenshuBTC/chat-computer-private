@@ -246,9 +246,12 @@ fn fetch(page: &mut Page, pictures: &mut Pictures, files: &Option<std::path::Pat
                 (Kind::Font, Some(b)) => page.font_came(i, &b),
                 (Kind::Picture, Some(b)) => match picture::decode_alpha(&b, 4000, 4000, u64::MAX) {
                     Ok((p, alpha)) => {
-                        let (w, h) = picture::size(&b).unwrap_or((p.width, p.height));
+                        let (w, h) = picture::shown_size(&b).unwrap_or((p.width, p.height));
                         let px = Arc::new(Pixels { rgb: p.rgb, alpha, width: p.width, height: p.height, natural: (w, h) });
                         page.picture_came(i, w, h);
+                        if let Some(own) = picture::intrinsic(&b) {
+                            page.picture_own(i, own);
+                        }
                         page.picture_pixels(i, px.clone());
                         if pictures.0.len() <= i {
                             pictures.0.resize(i + 1, None);
